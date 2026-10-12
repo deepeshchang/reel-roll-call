@@ -113,12 +113,12 @@ function printThreads(threads: ExportThread[]): void {
     }
 }
 
-/** Every reel/post shared in a chat, read with the saved session. */
-async function readChat(url: string): Promise<InputResult> {
+/** Every reel/post shared in a chat since `known` (queued from it before), read with the saved session. */
+async function readChat(url: string, known: ReadonlySet<string>): Promise<InputResult> {
     const session = await openSession(sessionOptions(config.headless));
     try {
-        log.action(`Reading ${url}: scrolling up through the whole chat, this can take a few minutes...`);
-        const items = await readThread(session.page, url, { signal: stop.signal, logger: log }).catch(async e => {
+        log.action(`Reading ${url}: scrolling up ${known.size ? 'to the reels queued from it before' : 'through the whole chat, this can take a few minutes'}...`);
+        const items = await readThread(session.page, url, { known, signal: stop.signal, logger: log }).catch(async e => {
             await session.page.screenshot({ path: path.join(logsDir, 'chat_error.png') }).catch(() => {});
             throw e;
         });
@@ -145,7 +145,7 @@ async function cmdAdd(args: string[]): Promise<void> {
     for (const input of positionals) {
         if (stop.signal.aborted) break;
         const chat = threadUrl(input);
-        const { source, items, threads } = chat ? await readChat(chat) : readInput(input, config.authorizedThreads);
+        const { source, items, threads } = chat ? await readChat(chat, db.shortcodesFrom(chat)) : readInput(input, config.authorizedThreads);
         const tally = { added: 0, requeued: 0, duplicate: 0 };
         for (const item of items) tally[db.add({ ...item, shared_by: item.shared_by ?? values.from }, source)]++;
         if (threads) printThreads(threads);

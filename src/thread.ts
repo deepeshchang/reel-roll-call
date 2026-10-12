@@ -6,6 +6,9 @@ import { BotError, Logger } from './logger';
 import { assertNotBounced, describePage } from './reel';
 
 const THREAD_PATH = /^\/direct\/t\/([A-Za-z0-9_-]+)\/?$/;
+// Reading stops after this many already-queued links in a row (newest first): the part read last time.
+// One old reel shared again is not enough to stop it.
+const KNOWN_IN_A_ROW = 3;
 
 /**
  * The canonical address of a DM conversation, https://www.instagram.com/direct/t/<id>/, or null.
@@ -27,14 +30,17 @@ export interface ThreadOptions {
     /** How long to wait for older messages after each scroll to the top (default 4s). */
     loadWaitMs?: number;
     maxScrolls?: number;
+    /** Shortcodes already queued from this chat; reading stops where they start (the part read last time). */
+    known?: ReadonlySet<string>;
     signal?: AbortSignal;
     logger?: Logger;
 }
 
 /**
  * Every reel/post link in a DM conversation - shared reels and pasted links - found by scrolling up
- * through the whole history (Ctrl+C returns what was found so far). Read-only: it types nothing and
- * clicks only "Not Now" on the notifications prompt. Opening the chat marks it seen, as a browser would.
+ * through the history, back to the start or to the `known` reels (Ctrl+C returns what was found so
+ * far). Read-only: it types nothing and clicks only "Not Now" on the notifications prompt. Opening the
+ * chat marks it seen, as a browser would.
  */
 export async function readThread(page: Page, url: string, opts: ThreadOptions = {}): Promise<Shared[]> {
     const timeout = opts.timeoutMs ?? 30000;
@@ -80,13 +86,22 @@ export async function readThread(page: Page, url: string, opts: ThreadOptions = 
     });
 
     const found = new Map<string, Shared>();
+    let knownInARow = 0;
     const gather = async () => {
         const text = await page.evaluate(() => {
             const root = document.querySelector('[data-bot-messages]') ?? document.querySelector('[role="main"]') ?? document.body;
             const hrefs = [...root.querySelectorAll('a[href]')].map(a => (a as HTMLAnchorElement).href);
             return [...hrefs, (root as HTMLElement).innerText].join('\n');
         });
-        for (const ref of extractRefs(text)) if (!found.has(ref.shortcode)) found.set(ref.shortcode, { ...ref, conversation: url });
+        let fresh = 0;
+        let unknown = 0;
+        for (const ref of extractRefs(text)) {
+            if (found.has(ref.shortcode)) continue;
+            found.set(ref.shortcode, { ...ref, conversation: url });
+            fresh++;
+            if (!opts.known?.has(ref.shortcode)) unknown++;
+        }
+        knownInARow = unknown ? 0 : knownInARow + fresh;
     };
     const signature = () =>
         page.evaluate(() => {
@@ -99,7 +114,7 @@ export async function readThread(page: Page, url: string, opts: ThreadOptions = 
     // row with nothing new means the top of the history.
     let idle = 0;
     let i = 0;
-    for (; scrollable && idle < 2 && i < (opts.maxScrolls ?? 1000) && !opts.signal?.aborted; i++) {
+    for (; scrollable && idle < 2 && knownInARow < KNOWN_IN_A_ROW && i < (opts.maxScrolls ?? 1000) && !opts.signal?.aborted; i++) {
         await dismissPrompt();
         const before = await signature();
         // Negative because chat lists usually scroll in reverse; a normal list just clamps to 0 (its top).
@@ -111,7 +126,8 @@ export async function readThread(page: Page, url: string, opts: ThreadOptions = 
         await gather();
         if (i % 10 === 9) opts.logger?.info(`Still scrolling up: ${found.size} link(s) so far.`);
     }
-    opts.logger?.info(`${scrollable ? `Scrolled up ${i} times` : 'No scrollable message list found, read what was on screen'}; ${found.size} link(s).`);
+    const reachedKnown = knownInARow >= KNOWN_IN_A_ROW ? ', up to reels queued before' : '';
+    opts.logger?.info(`${scrollable ? `Scrolled up ${i} times${reachedKnown}` : 'No scrollable message list found, read what was on screen'}; ${found.size} link(s).`);
     return [...found.values()];
 }
 

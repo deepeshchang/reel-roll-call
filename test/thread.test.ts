@@ -13,6 +13,8 @@ const fast = { timeoutMs: 3000, loadWaitMs: 600 };
 const shared = (href: string) => `<div role="row"><a href="${href}" role="link"><img alt="" width="60" height="60"><span>creator</span></a></div>`;
 const said = (html: string) => `<div role="row"><div dir="auto">${html}</div></div>`;
 
+const chatter = [said('haha'), said('ok')];
+
 // Oldest batch first. The newest batch shares OLD111 again; /someone/ is a profile link, not a reel.
 const HISTORY = [
     [shared('/reel/OLD111/'), said('old one: instagram.com/p/OLD222/'), said('haha')],
@@ -94,6 +96,30 @@ describe('readThread', () => {
     test('reads a short chat that does not scroll', async () => {
         const items = await readThread(await chatServing(chatPage([[shared('/reel/ONLY11/')]])), CHAT, fast);
         assert.deepEqual(codes(items), ['ONLY11']);
+    });
+
+    test('stops scrolling once it reaches reels already queued from this chat', async () => {
+        const history = [
+            [shared('/reel/OLDEST1/'), ...chatter], // beyond the part read last time: not reached
+            [shared('/reel/KNOWN1/'), said('instagram.com/p/KNOWN2/'), said('ok')],
+            [shared('/reel/KNOWN3/'), ...chatter],
+            [shared('/reel/NEW111/'), said('https://www.instagram.com/reel/NEW222/'), said('ok')],
+        ];
+        const items = await readThread(await chatServing(chatPage(history)), CHAT, { ...fast, known: new Set(['KNOWN1', 'KNOWN2', 'KNOWN3']) });
+        assert.deepEqual(codes(items), ['KNOWN1', 'KNOWN2', 'KNOWN3', 'NEW111', 'NEW222']);
+    });
+
+    test('keeps scrolling past a single old reel shared again', async () => {
+        const history = [
+            [shared('/reel/OLDEST1/'), ...chatter],
+            [shared('/reel/KNOWN1/'), shared('/reel/KNOWN2/'), shared('/reel/KNOWN3/'), shared('/reel/KNOWN4/')],
+            [shared('/reel/NEW111/'), ...chatter],
+            [shared('/reel/KNOWN1/'), ...chatter], // an old reel shared again, newer than NEW111
+            [shared('/reel/NEW222/'), ...chatter],
+        ];
+        const known = new Set(['KNOWN1', 'KNOWN2', 'KNOWN3', 'KNOWN4']);
+        const items = await readThread(await chatServing(chatPage(history)), CHAT, { ...fast, known });
+        assert.deepEqual(codes(items), ['KNOWN1', 'KNOWN2', 'KNOWN3', 'KNOWN4', 'NEW111', 'NEW222']);
     });
 
     test('raises SESSION_EXPIRED when the chat bounces to the login page', async () => {

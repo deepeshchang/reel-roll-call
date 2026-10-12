@@ -107,6 +107,10 @@ export class ReelStore {
         this.db.prepare(`UPDATE reels SET ${keys.map(key => `${key} = ?`).join(', ')} WHERE shortcode = ?`).run(...values, shortcode);
     }
 
+    shortcodesFrom(conversation: string): Set<string> {
+        return new Set(this.db.prepare('SELECT shortcode FROM reels WHERE conversation = ?').all(conversation).map(row => String(row.shortcode)));
+    }
+
     processedSince(isoTime: string): number {
         return Number(this.db.prepare('SELECT COUNT(*) AS n FROM reels WHERE processed_at >= ?').get(isoTime)?.n ?? 0);
     }

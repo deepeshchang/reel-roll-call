@@ -54,6 +54,14 @@ describe('ReelStore', () => {
         );
     });
 
+    test('lists the reels queued from one chat, so reading it again can stop there', () => {
+        const db = new ReelStore(':memory:');
+        db.add({ ...reel('AAA111'), conversation: 'https://www.instagram.com/direct/t/1/' }, 'dm-thread');
+        db.add({ ...reel('BBB222'), conversation: 'https://www.instagram.com/direct/t/2/' }, 'dm-thread');
+        db.add(reel('CCC333'), 'manual');
+        assert.deepEqual(db.shortcodesFrom('https://www.instagram.com/direct/t/1/'), new Set(['AAA111']));
+    });
+
     test('counts reels processed since a cut-off, for the daily limit', () => {
         const db = new ReelStore(':memory:');
         for (const code of ['AAA111', 'BBB222', 'CCC333']) db.add(reel(code), 'manual');

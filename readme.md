@@ -13,7 +13,7 @@ Built on Playwright, using your own logged-in browser session.
 
 1. **Queue reels** (`npm run add`). Give it a chat link (`https://www.instagram.com/direct/t/<id>/`, for
    example your group chat) and it scrolls through the whole chat and queues every reel and post shared
-   there. It also takes reel/post links, a text file of links, or the DM export Instagram gives you.
+   there. Adding the same chat again reads only back to the reels it queued last time, which is quick. It also takes reel/post links, a text file of links, or the DM export Instagram gives you.
 2. **Comment.**
    - `npm run auto`: opens each queued reel, types one of `COMMENT_PHRASES` (random, never the same one
      twice in a row) and clicks Post. Comments go out at least `COMMENT_GAP_SECONDS` apart, even across
