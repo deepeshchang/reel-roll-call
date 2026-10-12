@@ -1,0 +1,5 @@
+node_modules/
+dist/
+# runtime data: session cookies, SQLite DB, logs, screenshots
+data/
+.env

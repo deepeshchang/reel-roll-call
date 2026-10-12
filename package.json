@@ -4,8 +4,13 @@
   "main": "index.js",
   "scripts": {
     "start": "ts-node src/main.ts",
-    "test": "ts-node src/main.ts test-comment",
-    "checker": "ts-node src/main.ts check-accounts"
+    "login": "ts-node src/main.ts login",
+    "add": "ts-node src/main.ts add",
+    "auto": "ts-node src/main.ts auto",
+    "review": "ts-node src/main.ts review",
+    "status": "ts-node src/main.ts status",
+    "test": "node --require ts-node/register --test test/*.test.ts",
+    "typecheck": "tsc --noEmit"
   },
   "keywords": [],
   "author": "",

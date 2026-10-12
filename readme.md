@@ -1,132 +1,144 @@
-# Instagram AI Commenter Bot
+# Instagram Reel Commenter
 
-An advanced Instagram bot that automatically monitors target profiles for new posts and uses Google's Gemini AI to generate and post context-aware, human-like comments. It is built with Playwright for robust browser automation and incorporates advanced techniques to mimic human behavior and evade detection.
+Comments on Instagram reels that people share with you, in one of two ways:
 
-## ⚠️ Disclaimer
+- **Auto** (`npm run auto`): the bot comments on every queued reel by itself with one of your short
+  phrases ("Nice content 😊", "Cool content <3"), waiting a few minutes between comments, with a daily cap.
+- **Review** (`npm run review`): the bot drafts a comment for each reel with Google Gemini, you approve
+  it, and you post it yourself.
 
-This project is for educational purposes only. Automating interactions on Instagram is against their Terms of Service. Using this bot can result in your account being temporarily or permanently blocked. The developers of this project are not responsible for any consequences of its use. Use it at your own risk.
+Built on Playwright, using your own logged-in browser session.
 
----
+## How it works
 
-## Features
+1. **Queue reels** (`npm run add`). Give it a chat link (`https://www.instagram.com/direct/t/<id>/`, for
+   example your group chat) and it scrolls through the whole chat and queues every reel and post shared
+   there. It also takes reel/post links, a text file of links, or the DM export Instagram gives you.
+2. **Comment.**
+   - `npm run auto`: opens each queued reel, types one of `COMMENT_PHRASES` (random, never the same one
+     twice in a row) and clicks Post. Comments go out at least `COMMENT_GAP_SECONDS` apart, even across
+     runs, and at most `DAILY_LIMIT` per day.
+   - `npm run review`: shows each reel with an AI draft. You approve, edit, regenerate or skip it, then
+     post it yourself from your browser.
 
--   **AI-Powered Comments**: Utilizes Google Gemini's multimodal capabilities to analyze post captions, images, and even videos to generate highly relevant and natural-sounding comments.
--   **Multi-Account Management**: Configure and run the bot for multiple Instagram accounts, each with its own set of targets and settings.
--   **Continuous Monitoring**: Runs in a loop to monitor a list of target profiles, detecting new posts as soon as they are published.
--   **Human Behavior Emulation**: Simulates realistic human actions, including:
-    -   Natural, non-linear mouse movements.
-    -   Human-like typing with variable delays and simulated typos.
-    -   Randomized delays between actions to avoid predictability.
-    -   Jittery movements, unpredictable scrolling, and simulated "reading" time.
--   **Advanced Fingerprint Spoofing**: Generates and applies realistic browser fingerprints (User Agent, viewport, locale, timezone, WebGL, etc.) for each account to reduce the risk of detection.
--   **Persistent Sessions & Logging**:
-    -   Saves and reuses cookies for persistent login sessions.
-    -   Logs all comment interactions to a global CSV file (`interaction_log.csv`).
-    -   Tracks post/follower counts for each target in a separate CSV (`profile_stats.csv`) to detect new posts.
--   **Multiple Operational Modes**:
-    -   `monitor`: The main mode for continuously monitoring targets and posting comments.
-    -   `test-comment`: Runs a single comment task for a specific account to test its configuration.
-    -   `check-accounts`: A non-headless mode to manually check the status of each account, handle CAPTCHAs, or verify logins.
--   **Robust Error Handling**: Designed to handle common issues like private profiles, missing posts, and failed actions, with screenshotting on error for easier debugging.
+Everything is recorded in a local SQLite database: URL, chat, author, comment, status, result and
+timestamps. A reel is never commented on twice. The bot marks a reel as "posting" before it clicks Post,
+so if a run is cut off mid-post, that reel is not retried.
 
-## Prerequisites
+## Risks and limits (read this)
 
-Before you begin, ensure you have the following installed:
--   [Node.js](https://nodejs.org/) (v18 or higher recommended)
--   [npm](https://www.npmjs.com/) or [yarn](https://yarnpkg.com/)
+- **Auto mode is against Instagram's Terms of Use.** Instagram has no API for commenting on other
+  people's reels, so auto mode drives your logged-in browser. The same few phrases on many reels look
+  like spam to Instagram. Expect possible comment blocks ("Try again later"), hidden comments, or account
+  restrictions. Keep `DAILY_LIMIT` low and `COMMENT_GAP_SECONDS` high.
+- **The bot backs off rather than fighting Instagram.** At the first "Try again later", refused comment,
+  security check or unrecognised page, it stops. It never solves CAPTCHAs or 2FA, never spoofs a browser
+  fingerprint, and never likes, follows or messages anyone.
+- **Reading a chat by link** opens it in the logged-in browser, so its messages are marked as seen, just
+  as if you had opened it. Instagram changes its chat page often. If `add` finds no links in a chat that
+  has shared reels, the page has changed (a screenshot is saved to `data/logs/chat_no_links.png`).
+  Encrypted chats may only show recent history on the web.
+- **Use the chat's own address, not an invite link.** Open the group in a browser and copy the
+  `instagram.com/direct/t/...` URL. Invite links are refused because opening one can add you to a group.
 
-## Setup & Installation
+## Setup (macOS)
 
-1.  **Clone the Repository**
-    ```bash
-    git clone https://github.com/dzeveckij/instagram-ai-commenter-bot.git
-    cd instagram-ai-commenter-bot
-    ```
+1. Install Node.js 22.13 or newer (`brew install node`). Node 26 was used to build this; it provides the
+   built-in `node:sqlite`.
+2. Install dependencies and the Chromium build Playwright uses:
+   ```bash
+   npm install
+   npx playwright install chromium
+   ```
+3. Create your settings file (gitignored) and fill it in:
+   ```bash
+   cp .env.example .env
+   chmod 600 .env
+   open -e .env
+   ```
+4. Log in once in a visible browser. Complete any two-factor or security step yourself. The session is
+   saved to `data/cookies/` (owner-only) and reused by later runs:
+   ```bash
+   npm run login
+   ```
 
-2.  **Install Dependencies**
-    This will also download the necessary Playwright browser binaries.
-    ```bash
-    npm install
-    ```
+## Settings (`.env`)
 
-3.  **Configure the Bot**
-    The main configuration is done in the `src/config.ts` file. Open this file and edit it according to your needs.
+| Variable | Required | Meaning |
+|---|---|---|
+| `IG_USERNAME` | yes | Your Instagram username. |
+| `IG_PASSWORD` | no | Lets the bot submit the login form once. Leave empty to type it yourself in `npm run login`. |
+| `DRY_RUN` | no | `true` by default. Only the exact value `false` posts anything. |
+| `COMMENT_PHRASES` | no | Auto-mode comments, separated by `\|`. Default: `Nice content 😊\|Nice content 🙌\|Nice content 🔥\|Cool content <3`. |
+| `COMMENT_GAP_SECONDS` | no | Minimum time between two posted comments, also across runs (default 180). |
+| `DAILY_LIMIT` | no | Reels opened per day, so also the most comments per day (default 20). |
+| `ACTION_DELAY_SECONDS` | no | Minimum gap between Instagram page loads (default 30). |
+| `HEADLESS` | no | `false` shows the browser while it works (default `true`). |
+| `GEMINI_API_KEY` | no | Google AI Studio key for review-mode drafts. Without it you write every comment. |
+| `GEMINI_MODEL` | no | Defaults to `gemini-flash-lite-latest`. |
+| `AI_PROMPT_HINT` | no | Extra guidance for the AI's comment style. |
+| `AUTHORIZED_THREADS` | no | Comma-separated chats allowed for DM-export import. |
 
-    -   **Google AI API Key**: Add your Google Gemini API key to the `googleAiApiKey` string. You can get one from [Google AI Studio](https://aistudio.google.com/app/apikey).
-    -   **Headless Mode**: Set `headless: true` to run the browser in the background or `false` to see the browser window.
-    -   **Accounts**: Add your Instagram accounts to the `accounts` array.
-        -   `enabled`: `true` to use this account, `false` to disable it.
-        -   `username`/`password`: Your Instagram credentials.
-        -   `aiPromptHint`: (Optional) A custom instruction for the AI to guide its comment style for this specific account.
-        -   `targets`: A list of Instagram usernames this account should monitor.
-
-    *See the [Configuration](#configuration) section below for more details.*
-
-## Usage (Running the Bot)
-
-You can run the bot in three different modes using the predefined npm scripts.
-
-**1. Monitor Mode (Default)**
-This is the primary mode. The bot will launch and start monitoring all targets from all enabled accounts. When a new post is detected, it will use the designated accounts to post comments.
-
-```bash
-npm start
-```
-
-**2. Test Comment Mode**
-This mode tests the first enabled account's ability to comment on its first target. It's useful for a quick check of your setup.
-
-```bash
-npm test
-```
-To test a *specific* account from your config, you can run the command directly and pass the username:
-```bash
-npx ts-node src/main.ts test-comment your_instagram_username_1
-```
-
-**3. Check Accounts Mode**
-This mode runs in non-headless (`headless: false`) mode. It logs into each enabled account one by one, pausing after each login. This allows you to manually inspect the account, solve CAPTCHAs, or handle two-factor authentication. Press `ENTER` in the terminal to proceed to the next account.
+## Usage
 
 ```bash
-npm run checker
+# 1. Queue every reel/post shared in your group chat
+npm run add -- https://www.instagram.com/direct/t/<chat-id>/
+
+# 2. Rehearse: opens each reel, types the comment and clears it again. Nothing is posted or recorded.
+npm run auto -- --dry-run
+
+# 3. Go live: posts by itself, 3 minutes apart, up to 20 a day
+DRY_RUN=false npm run auto
+
+# Run it again (or daily) to continue; re-adding the chat link queues only new reels (and retries failed ones)
+npm run add -- https://www.instagram.com/direct/t/<chat-id>/ && DRY_RUN=false npm run auto
+
+# What happened so far
+npm run status
 ```
 
-### In-Script Controls
-- **CTRL+C**: Stop the bot at any time.
-- **`i` key**: Request a pause. The script will enter debug mode at the next available opportunity, allowing you to use the Playwright Inspector.
+Other ways to queue reels:
 
----
-
-## Configuration (`src/config.ts`)
-
-The `config.ts` file is the control center for the bot.
-
-```typescript
-export interface Config {
-    settings: {
-        headless: boolean; // Run browser in background (true) or visibly (false)
-        developerMode: boolean; // Use shorter delays for fast debugging
-        googleAiApiKey: string; // Your Google Gemini API key
-        monitoringIntervalSeconds: { min: number; max: number }; // Time between checking all targets
-        defaultActionDelaySeconds: { min: number; max: number }; // Time between consecutive comments
-        // ...
-    },
-    accounts: [
-        {
-            enabled: boolean; // Set to true to use this account
-            username: string;
-            password: string;
-            aiPromptHint?: string; // Optional AI instruction
-            targets: string[]; // List of usernames to monitor
-            // ...
-        },
-        // ... more accounts
-    ],
-};
+```bash
+npm run add -- https://www.instagram.com/reel/XXXXXXXXXXX/ --from "Alice"
+npm run add -- ~/Desktop/reels.txt                          # any text containing links
+npm run add -- ~/Downloads/instagram-yourname-2026-10-12/   # unzipped data export (AUTHORIZED_THREADS)
 ```
 
----
+Review mode, with approval and manual posting:
 
-## License
+```bash
+npm run review -- --dry-run      # approvals are recorded, nothing is opened for posting
+DRY_RUN=false npm run review     # approved comments are handed to you to post
+```
 
-This project is open-source and available to everyone. Please see the LICENSE file for more details.
+Auto mode also posts comments you approved in a review that were never posted. It comments on those
+first, using your approved text.
+
+**Stopping:** press Ctrl+C to finish the current step and exit; press it again to exit immediately. The
+next run picks up where this one stopped.
+
+## Troubleshooting
+
+- **`[SESSION_EXPIRED]`, `[AUTH_REQUIRED]`, `[TWO_FACTOR]`, `[CHECKPOINT]`:** run `npm run login` and finish
+  the step in the browser window.
+- **`[RATE_LIMITED]`:** Instagram blocked an action. Wait several hours (a day is safer), then lower
+  `DAILY_LIMIT` or raise `COMMENT_GAP_SECONDS`. The blocked comment is posted on the next run.
+- **`[COMMENT_FAILED]`:** Instagram refused a comment, or the bot clicked Post but couldn't see the comment
+  appear. Check that reel in your browser. Unconfirmed comments are never retried.
+- **`[UNKNOWN_PAGE]`:** a page didn't match anything known. A screenshot is saved in `data/logs/`.
+- Logs: human-readable on screen, structured JSON lines in `data/logs/bot.jsonl`. Passwords and API keys
+  are redacted.
+
+## Development
+
+```bash
+npm test           # offline tests: real headless Chromium against local copies of Instagram's pages
+npm run typecheck
+```
+
+## Disclaimer
+
+Use this with your own account and at your own risk. Automated commenting breaks Instagram's Terms of
+Use and can get your account restricted or disabled.
