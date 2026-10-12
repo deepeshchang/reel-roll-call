@@ -2,8 +2,9 @@
 
 Comments on Instagram reels that people share with you, in one of two ways:
 
-- **Auto** (`npm run auto`): the bot comments on every queued reel by itself with one of your short
-  phrases ("Nice content 😊", "Cool content <3"), waiting a few minutes between comments, with a daily cap.
+- **Auto** (`npm run auto`): the bot picks up the reels shared today in your group chats, likes each one
+  and comments with a phrase from the groups' comment guide that fits the reel ("Yummy Dish 🍽️",
+  "Smooth Editing 🔥"), waiting between comments, with daily caps.
 - **Review** (`npm run review`): the bot drafts a comment for each reel with Google Gemini, you approve
   it, and you post it yourself.
 
@@ -11,14 +12,17 @@ Built on Playwright, using your own logged-in browser session.
 
 ## How it works
 
-1. **Queue reels** (`npm run add`). Give it a chat link (`https://www.instagram.com/direct/t/<id>/`, for
-   example your group chat) and it scrolls through the whole chat and queues every reel and post shared
-   there. Adding the same chat again reads only back to the reels it queued last time, which is quick. It also takes reel/post links, a text file of links, or the DM export Instagram gives you.
-2. **Comment.**
-   - `npm run auto`: opens each queued reel, types one of `COMMENT_PHRASES` (random, never the same one
-     twice in a row) and clicks Post. Comments go out at least `COMMENT_GAP_SECONDS` apart, even across
-     runs, at most `DAILY_LIMIT` per day, and at most `AUTHOR_DAILY_LIMIT` per day on the same account's
-     posts (the rest of that account's reels wait for a later day).
+1. **Queue reels** (`npm run add`). It reads the chats in `GROUP_CHATS` back to the first message of an
+   earlier day and queues the reels and posts shared there today. It also takes a chat link
+   (`https://www.instagram.com/direct/t/<id>/`; `--all` reads the whole chat), reel/post links, a text
+   file of links, or the DM export Instagram gives you.
+2. **Like and comment.**
+   - `npm run auto`: queues today's reels from `GROUP_CHATS` first, then opens each queued reel, likes it
+     (never un-likes one you already liked), and comments with a phrase from the comment guide in
+     `src/guide.ts`: 2 words + 1 emoji, in the category that fits the reel. Gemini picks the category from
+     the caption and cover image; without `GEMINI_API_KEY` it uses the guide's general phrases. Comments
+     go out at least `COMMENT_GAP_SECONDS` apart, even across runs, at most `DAILY_LIMIT` per day, and at
+     most `AUTHOR_DAILY_LIMIT` per day on the same account's posts (the rest wait for a later day).
    - `npm run review`: shows each reel with an AI draft. You approve, edit, regenerate or skip it, then
      post it yourself from your browser.
 
@@ -29,13 +33,13 @@ so if a run is cut off mid-post, that reel is not retried.
 ## Risks and limits (read this)
 
 - **Auto mode is against Instagram's Terms of Use.** Instagram has no API for commenting on other
-  people's reels, so auto mode drives your logged-in browser. The same few phrases on many reels look
+  people's reels, so auto mode drives your logged-in browser. The same short phrases on many reels look
   like spam to Instagram. Expect possible comment blocks ("Try again later"), hidden comments, or account
   restrictions. Keep `DAILY_LIMIT` and `AUTHOR_DAILY_LIMIT` low and `COMMENT_GAP_SECONDS` high. Many
   comments on one account's posts in a short time look the most like spam.
 - **The bot backs off rather than fighting Instagram.** At the first "Try again later", refused comment,
   security check or unrecognised page, it stops. It never solves CAPTCHAs or 2FA, never spoofs a browser
-  fingerprint, and never likes, follows or messages anyone.
+  fingerprint, and never follows or messages anyone. It likes only the reels it comments on.
 - **Reading a chat by link** opens it in the logged-in browser, so its messages are marked as seen, just
   as if you had opened it. Instagram changes its chat page often. If `add` finds no links in a chat that
   has shared reels, the page has changed (a screenshot is saved to `data/logs/chat_no_links.png`).
@@ -71,8 +75,8 @@ so if a run is cut off mid-post, that reel is not retried.
 | `IG_USERNAME` | yes | Your Instagram username. |
 | `IG_PASSWORD` | no | Lets the bot submit the login form once. Leave empty to type it yourself in `npm run login`. |
 | `DRY_RUN` | no | `true` by default. Only the exact value `false` posts anything. |
-| `COMMENT_PHRASES` | no | Auto-mode comments, separated by `\|`. Default: `Nice content 😊\|Nice content 🙌\|Nice content 🔥\|Cool content <3`. |
-| `COMMENT_GAP_SECONDS` | no | Minimum time between two posted comments, also across runs (default 180). |
+| `GROUP_CHATS` | no | Your group chats' links, comma-separated. `add` and `auto` read the reels shared in them today. |
+| `COMMENT_GAP_SECONDS` | no | Minimum time between two posted comments, also across runs (default 90). |
 | `DAILY_LIMIT` | no | Reels opened per day, so also the most comments per day (default 20). |
 | `AUTHOR_DAILY_LIMIT` | no | Most auto comments per day on posts by the same account (default 2). |
 | `ACTION_DELAY_SECONDS` | no | Minimum gap between Instagram page loads (default 30). |
@@ -85,17 +89,18 @@ so if a run is cut off mid-post, that reel is not retried.
 ## Usage
 
 ```bash
-# 1. Queue every reel/post shared in your group chat
-npm run add -- https://www.instagram.com/direct/t/<chat-id>/
+# 0. Once: put your group chats in .env
+#    GROUP_CHATS=https://www.instagram.com/direct/t/<chat-id>/,https://www.instagram.com/direct/t/<other-id>/
 
-# 2. Rehearse: opens each reel, types the comment and clears it again. Nothing is posted or recorded.
+# 1. Rehearse: queues today's reels, finds each Like button, types the comment and clears it again.
+#    Nothing is liked, posted or recorded.
 npm run auto -- --dry-run
 
-# 3. Go live: posts by itself, 3 minutes apart, up to 20 a day
+# 2. Go live: likes and comments by itself, 90 seconds apart, up to DAILY_LIMIT a day
 DRY_RUN=false npm run auto
 
-# Run it again (or daily) to continue; re-adding the chat link queues only new reels (and retries failed ones)
-npm run add -- https://www.instagram.com/direct/t/<chat-id>/ && DRY_RUN=false npm run auto
+# Run it again later in the day to pick up reels shared since; ones already handled are skipped
+DRY_RUN=false npm run auto
 
 # What happened so far
 npm run status

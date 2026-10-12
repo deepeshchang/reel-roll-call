@@ -10,6 +10,23 @@ const THREAD_PATH = /^\/direct\/t\/([A-Za-z0-9_-]+)\/?$/;
 // One old reel shared again is not enough to stop it.
 const KNOWN_IN_A_ROW = 3;
 
+// Instagram's markers between message groups (pages are in English). Today's show only the time
+// ("9:41 PM", or "Today 9:41 PM"); earlier days' add the day ("Yesterday 9:41 PM", "Mon 9:41 PM", "Oct 7, 9:41 PM").
+const TIME = String.raw`\d{1,2}[:.]\d{2}(?:\s?[ap]\.?m\.?)?`;
+const MONTH = String.raw`(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?`;
+const WEEKDAY = String.raw`(?:mon|tue|wed|thu|fri|sat|sun)[a-z]*\.?`;
+const TODAY_MARKER = new RegExp(String.raw`^(?:today,?\s+(?:at\s+)?)?${TIME}$`, 'i');
+const EARLIER_MARKER = new RegExp(
+    String.raw`^(?:yesterday|${WEEKDAY}|${MONTH}\s+\d{1,2}|\d{1,2}\s+${MONTH}|\d{1,2}/\d{1,2}/\d{2,4}),?\s+(?:\d{4},?\s+)?(?:at\s+)?${TIME}$`,
+    'i'
+);
+
+/** Whether a day marker's text is from today or an earlier day; undefined for anything else. */
+export function dayOf(marker: string): 'today' | 'earlier' | undefined {
+    const text = marker.replace(/\s+/g, ' ').trim();
+    return TODAY_MARKER.test(text) ? 'today' : EARLIER_MARKER.test(text) ? 'earlier' : undefined;
+}
+
 /**
  * The canonical address of a DM conversation, https://www.instagram.com/direct/t/<id>/, or null.
  * Group invite links are deliberately not accepted: opening one can add you to the group.
@@ -30,6 +47,8 @@ export interface ThreadOptions {
     /** How long to wait for older messages after each scroll to the top (default 4s). */
     loadWaitMs?: number;
     maxScrolls?: number;
+    /** Only reels shared today: reading stops at the first marker of an earlier day ("Yesterday 9:41 PM"). */
+    todayOnly?: boolean;
     /** Shortcodes already queued from this chat; reading stops where they start (the part read last time). */
     known?: ReadonlySet<string>;
     signal?: AbortSignal;
@@ -38,8 +57,8 @@ export interface ThreadOptions {
 
 /**
  * Every reel/post link in a DM conversation - shared reels and pasted links - found by scrolling up
- * through the history, back to the start or to the `known` reels (Ctrl+C returns what was found so
- * far). Read-only: it types nothing and clicks only "Not Now" on the notifications prompt. Opening the
+ * through the history, back to the start, to the `known` reels, or with `todayOnly` to the previous
+ * day (Ctrl+C returns what was found so far). Read-only: it types nothing and clicks only "Not Now" on the notifications prompt. Opening the
  * chat marks it seen, as a browser would.
  */
 export async function readThread(page: Page, url: string, opts: ThreadOptions = {}): Promise<Shared[]> {
@@ -87,21 +106,55 @@ export async function readThread(page: Page, url: string, opts: ThreadOptions = 
 
     const found = new Map<string, Shared>();
     let knownInARow = 0;
+    // todayOnly: a link's day is that of the nearest marker above it.
+    const today = new Set<string>();
+    const dated = new Set<string>();
+    let undated: string[] = []; // their marker is further up than what has been read so far
+    let reachedEarlier = false;
+    const markers: string[] = [];
+    const unrecognised = new Set<string>();
+    const codesIn = (token: Token) => (token.kind === 'link' ? extractRefs(token.text).map(ref => ref.shortcode) : []);
+    const date = (tokens: Token[]) => {
+        const rendered = new Set(tokens.flatMap(codesIn));
+        let open = undated.filter(code => !rendered.has(code)); // scrolled out of view: below everything shown
+        for (const token of [...tokens].reverse()) {
+            if (token.kind === 'other') {
+                if (unrecognised.size < 5) unrecognised.add(token.text);
+                continue;
+            }
+            const day = token.kind === 'marker' ? dayOf(token.text) : undefined;
+            if (!day) {
+                for (const code of codesIn(token)) if (!dated.has(code) && !open.includes(code)) open.push(code);
+                continue;
+            }
+            if (!markers.includes(token.text)) markers.push(token.text);
+            for (const code of open) {
+                dated.add(code);
+                if (day === 'today') today.add(code);
+            }
+            open = [];
+            if (day === 'earlier') {
+                reachedEarlier = true;
+                break; // everything above it is older
+            }
+        }
+        undated = open;
+    };
     const gather = async () => {
-        const text = await page.evaluate(() => {
-            const root = document.querySelector('[data-bot-messages]') ?? document.querySelector('[role="main"]') ?? document.body;
-            const hrefs = [...root.querySelectorAll('a[href]')].map(a => (a as HTMLAnchorElement).href);
-            return [...hrefs, (root as HTMLElement).innerText].join('\n');
-        });
+        const tokens = await page.evaluate(readTokens, [TODAY_MARKER.source, EARLIER_MARKER.source]);
         let fresh = 0;
         let unknown = 0;
-        for (const ref of extractRefs(text)) {
-            if (found.has(ref.shortcode)) continue;
-            found.set(ref.shortcode, { ...ref, conversation: url });
-            fresh++;
-            if (!opts.known?.has(ref.shortcode)) unknown++;
+        for (const token of tokens) {
+            if (token.kind !== 'link') continue;
+            for (const ref of extractRefs(token.text)) {
+                if (found.has(ref.shortcode)) continue;
+                found.set(ref.shortcode, { ...ref, conversation: url });
+                fresh++;
+                if (!opts.known?.has(ref.shortcode)) unknown++;
+            }
         }
         knownInARow = unknown ? 0 : knownInARow + fresh;
+        if (opts.todayOnly) date(tokens);
     };
     const signature = () =>
         page.evaluate(() => {
@@ -114,7 +167,7 @@ export async function readThread(page: Page, url: string, opts: ThreadOptions = 
     // row with nothing new means the top of the history.
     let idle = 0;
     let i = 0;
-    for (; scrollable && idle < 2 && knownInARow < KNOWN_IN_A_ROW && i < (opts.maxScrolls ?? 1000) && !opts.signal?.aborted; i++) {
+    for (; scrollable && idle < 2 && knownInARow < KNOWN_IN_A_ROW && !reachedEarlier && i < (opts.maxScrolls ?? 1000) && !opts.signal?.aborted; i++) {
         await dismissPrompt();
         const before = await signature();
         // Negative because chat lists usually scroll in reverse; a normal list just clamps to 0 (its top).
@@ -126,9 +179,64 @@ export async function readThread(page: Page, url: string, opts: ThreadOptions = 
         await gather();
         if (i % 10 === 9) opts.logger?.info(`Still scrolling up: ${found.size} link(s) so far.`);
     }
-    const reachedKnown = knownInARow >= KNOWN_IN_A_ROW ? ', up to reels queued before' : '';
-    opts.logger?.info(`${scrollable ? `Scrolled up ${i} times${reachedKnown}` : 'No scrollable message list found, read what was on screen'}; ${found.size} link(s).`);
-    return [...found.values()];
+    const why = reachedEarlier ? ', back to the previous day' : knownInARow >= KNOWN_IN_A_ROW ? ', up to reels queued before' : '';
+    const items = [...found.values()].filter(item => !opts.todayOnly || today.has(item.shortcode));
+    opts.logger?.info(
+        `${scrollable ? `Scrolled up ${i} times${why}` : 'No scrollable message list found, read what was on screen'}; ${items.length} link(s)${opts.todayOnly ? ' shared today' : ''}.`
+    );
+    if (opts.todayOnly) {
+        const shown = markers.length > 6 ? [...markers.slice(0, 5), '...', markers[markers.length - 1]] : markers;
+        opts.logger?.info(`Day markers, newest first: ${shown.map(text => `"${text}"`).join(', ') || 'none'}.`);
+        if (!markers.length) {
+            const samples = [...unrecognised].map(text => `"${text}"`).join(', ');
+            opts.logger?.warn(`No day markers recognised, so no reel could be dated. Instagram's chat page may have changed${samples ? `; time-like texts seen: ${samples}` : ''}.`, 'UNKNOWN_PAGE');
+        }
+    }
+    return items;
+}
+
+type Token = { kind: 'link' | 'marker' | 'other'; text: string; top: number };
+
+/**
+ * Runs in the page: the links and day markers in the message list, top to bottom ("other": short texts
+ * with a time in them that are not markers, for diagnosis).
+ */
+function readTokens([todaySource, earlierSource]: string[]): Token[] {
+    const root = document.querySelector('[data-bot-messages]') ?? document.querySelector('[role="main"]') ?? document.body;
+    const today = new RegExp(todaySource, 'i');
+    const earlier = new RegExp(earlierSource, 'i');
+    const clean = (el: Node) => (el.textContent ?? '').replace(/\s+/g, ' ').trim();
+    const isMarker = (el: Element) => today.test(clean(el)) || earlier.test(clean(el));
+    const tokens: Token[] = [];
+    const place = (el: Element, kind: Token['kind'], text: string) => {
+        const box = el.getBoundingClientRect();
+        if (box.width || box.height) tokens.push({ kind, text, top: box.top });
+    };
+    root.querySelectorAll('a[href]').forEach(a => place(a, 'link', (a as HTMLAnchorElement).href));
+    const markers = new Set<Element>();
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const parent = node.parentElement;
+        const text = node.textContent ?? '';
+        if (!parent) continue;
+        if (/instagram\.com|instagr\.am/i.test(text)) {
+            place(parent, 'link', text);
+        } else if (text.length <= 40 && /\d[:.]\d\d/.test(text)) {
+            // A marker may be split over elements ("Yesterday" + "9:41 PM"): take the outermost that is only the marker.
+            // ponytail: a message that is just a time ("9:30") reads as a marker too; rare in these chats.
+            let marker: Element | undefined;
+            for (let el: Element | null = parent, depth = 0; el && el !== root && depth < 5; el = el.parentElement, depth++) {
+                if (isMarker(el)) marker = el;
+                else if (marker) break;
+            }
+            if (!marker) place(parent, 'other', clean(parent).slice(0, 40));
+            else if (!markers.has(marker)) {
+                markers.add(marker);
+                place(marker, 'marker', clean(marker));
+            }
+        }
+    }
+    return tokens.sort((a, b) => a.top - b.top);
 }
 
 /** Polls `read` until it differs from `before`, for up to `waitMs`. */

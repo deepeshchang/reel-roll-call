@@ -21,6 +21,7 @@ const row: ReelRow = {
     processed_at: '2026-10-12T09:01:00.000Z',
     decided_at: null,
     submitted_at: null,
+    liked_at: null,
 };
 
 /** Stands in for the terminal: answers each prompt from a script and records what was asked. */

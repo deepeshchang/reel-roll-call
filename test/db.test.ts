@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { DatabaseSync } from 'node:sqlite';
 import { ReelStore } from '../src/db';
 
 const reel = (shortcode: string, kind = 'reel') => ({ shortcode, url: `https://www.instagram.com/${kind}/${shortcode}/` });
@@ -102,6 +103,19 @@ describe('ReelStore', () => {
         const db = new ReelStore(':memory:');
         db.add(reel('AAA111'), 'manual');
         assert.throws(() => db.update('AAA111', { status: 'posted' as never }), /CHECK constraint/);
+    });
+
+    test('adds the liked_at column to a database created before likes existed', () => {
+        const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ig-db-')), 'reels.db');
+        const old = new DatabaseSync(file);
+        old.exec(`CREATE TABLE reels (shortcode TEXT PRIMARY KEY, url TEXT NOT NULL, source TEXT NOT NULL, conversation TEXT,
+            shared_by TEXT, shared_at TEXT, author TEXT, caption TEXT, status TEXT NOT NULL DEFAULT 'queued', proposed_comment TEXT,
+            final_comment TEXT, submission TEXT, error TEXT, queued_at TEXT NOT NULL, processed_at TEXT, decided_at TEXT, submitted_at TEXT)`);
+        old.close();
+        const db = new ReelStore(file);
+        db.add(reel('AAA111'), 'manual');
+        db.update('AAA111', { liked_at: '2026-10-13T01:00:00.000Z' });
+        assert.equal(db.next('queued')?.liked_at, '2026-10-13T01:00:00.000Z');
     });
 
     test('creates the database file readable by the owner only', () => {

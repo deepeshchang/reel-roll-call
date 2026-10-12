@@ -23,7 +23,6 @@ const list = (raw: string | undefined) =>
     (raw ?? '').split(',').map(item => item.trim()).filter(Boolean);
 
 const username = (env.IG_USERNAME ?? '').trim();
-const phrases = (env.COMMENT_PHRASES ?? '').split('|').map(phrase => phrase.trim()).filter(Boolean);
 export const dataDir = path.join(rootDir, 'data');
 export const logsDir = path.join(dataDir, 'logs');
 
@@ -41,10 +40,10 @@ export const config = {
     dailyLimit: positiveInt('DAILY_LIMIT', 20),
     /** Minimum gap between page loads on Instagram - conservative pacing, not evasion. */
     actionDelaySeconds: positiveInt('ACTION_DELAY_SECONDS', 30),
-    /** `npm run auto` comments with one of these, never the same one twice in a row. */
-    commentPhrases: phrases.length ? phrases : ['Nice content 😊', 'Nice content 🙌', 'Nice content 🔥', 'Cool content <3'],
+    /** Group chats (chat links) whose reels of the day `npm run add` and `npm run auto` read. */
+    groupChats: list(env.GROUP_CHATS),
     /** Minimum gap between two posted comments, also across runs. */
-    commentGapSeconds: positiveInt('COMMENT_GAP_SECONDS', 180),
+    commentGapSeconds: positiveInt('COMMENT_GAP_SECONDS', 90),
     /** `npm run auto` comments at most this many times a day on posts by the same account. */
     authorDailyLimit: positiveInt('AUTHOR_DAILY_LIMIT', 2),
     /** DM conversations (export folder names or titles) explicitly authorised for import. */

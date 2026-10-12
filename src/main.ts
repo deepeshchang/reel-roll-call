@@ -11,8 +11,9 @@ import { firstLine, openSession, Session } from './auth';
 import { ExportThread, InputResult, readInput } from './ingest';
 import { ReelRow, ReelStore } from './db';
 import { openReel, ReelInfo } from './reel';
-import { readThread, threadUrl } from './thread';
-import { CommentOutcome, pickPhrase, postAndRecord, postComment, Save } from './comment';
+import { readThread, threadUrl, ThreadOptions } from './thread';
+import { CommentOutcome, likePost, LikeOutcome, postAndRecord, postComment, Save } from './comment';
+import { COMMENT_GUIDE, GuideEntry, guidePhrase } from './guide';
 import { AICommentGenerator } from './genai';
 import { askApproval, describeReel } from './approval';
 import { handOffForPosting } from './submit';
@@ -23,13 +24,14 @@ const USAGE = `Usage: npm run <command>   (or: npm start -- <command>)
 
   login                   Open a visible browser and log in; complete any 2FA / security check yourself.
                           The session is saved (owner-only) for later runs.
-  add -- <link|file|dir>  Queue reels: reel/post links, a chat link (https://www.instagram.com/direct/t/<id>/,
-                          queues every reel and post shared in it), a text file of links, or your Instagram
-                          "Download your information" export folder (authorised chats only).
+  add [-- <link|file|dir>] Queue reels. With nothing after it: the reels shared today in GROUP_CHATS.
+                          Also takes reel/post links, a chat link (https://www.instagram.com/direct/t/<id>/:
+                          the reels shared in it today, --all for the whole chat), a text file of links, or
+                          your Instagram "Download your information" export folder (authorised chats only).
                           --from "<name>"  record who shared manually added links.
-  auto [-- --dry-run]     Comment on every queued reel by itself with one of COMMENT_PHRASES, at least
-                          COMMENT_GAP_SECONDS apart, at most DAILY_LIMIT a day and AUTHOR_DAILY_LIMIT
-                          a day on the same account's posts.
+  auto [-- --dry-run]     Queue today's reels from GROUP_CHATS, then like each queued reel and comment with
+                          a phrase from the comment guide that fits it: at least COMMENT_GAP_SECONDS apart,
+                          at most DAILY_LIMIT a day and AUTHOR_DAILY_LIMIT a day on the same account's posts.
   review [-- --dry-run]   Open queued reels, draft a comment for each, and ask you to approve it.
   status                  Show the queue and recent decisions.
 
@@ -113,22 +115,21 @@ function printThreads(threads: ExportThread[]): void {
     }
 }
 
-/** Every reel/post shared in a chat since `known` (queued from it before), read with the saved session. */
-async function readChat(url: string, known: ReadonlySet<string>): Promise<InputResult> {
+/** The reels/posts shared in a chat (today's, or back to the `known` ones), read with the saved session. */
+async function readChat(url: string, opts: Pick<ThreadOptions, 'todayOnly' | 'known'>): Promise<InputResult> {
     const session = await openSession(sessionOptions(config.headless));
     try {
-        log.action(`Reading ${url}: scrolling up ${known.size ? 'to the reels queued from it before' : 'through the whole chat, this can take a few minutes'}...`);
-        const items = await readThread(session.page, url, { known, signal: stop.signal, logger: log }).catch(async e => {
+        const scope = opts.todayOnly ? "through today's messages" : opts.known?.size ? 'to the reels queued from it before' : 'through the whole chat, this can take a few minutes';
+        log.action(`Reading ${url}: scrolling up ${scope}...`);
+        const items = await readThread(session.page, url, { ...opts, signal: stop.signal, logger: log }).catch(async e => {
             await session.page.screenshot({ path: path.join(logsDir, 'chat_error.png') }).catch(() => {});
             throw e;
         });
         if (items.length === 0) {
-            const shot = path.join(logsDir, 'chat_no_links.png');
+            const shot = path.relative(process.cwd(), path.join(logsDir, 'chat_no_links.png'));
             await session.page.screenshot({ path: shot }).catch(() => {});
-            log.warn(
-                `No reel or post links found in that chat. If it does have shared reels, Instagram's chat page has probably changed; screenshot: ${path.relative(process.cwd(), shot)}`,
-                'UNKNOWN_PAGE'
-            );
+            if (opts.todayOnly) log.info(`No reels shared in that chat today (screenshot: ${shot}).`);
+            else log.warn(`No reel or post links found in that chat. If it does have shared reels, Instagram's chat page has probably changed; screenshot: ${shot}`, 'UNKNOWN_PAGE');
         }
         return { source: 'dm-thread', items };
     } finally {
@@ -136,21 +137,34 @@ async function readChat(url: string, known: ReadonlySet<string>): Promise<InputR
     }
 }
 
-async function cmdAdd(args: string[]): Promise<void> {
-    const { values, positionals } = parseArgs({ args, options: { from: { type: 'string' } }, allowPositionals: true });
-    if (positionals.length === 0) {
-        throw new BotError('INPUT', 'Nothing to add. Example: npm run add -- https://www.instagram.com/reel/XXXXXXXXXXX/');
-    }
-    const db = new ReelStore(config.dbFile);
-    for (const input of positionals) {
+/** Queues the reels in each input: links, a file of links, an export folder, or a chat (today's reels; `all`: the whole chat). */
+async function queueInputs(db: ReelStore, inputs: string[], opts: { from?: string; all?: boolean } = {}): Promise<void> {
+    for (const input of inputs) {
         if (stop.signal.aborted) break;
         const chat = threadUrl(input);
-        const { source, items, threads } = chat ? await readChat(chat, db.shortcodesFrom(chat)) : readInput(input, config.authorizedThreads);
+        const { source, items, threads } = chat
+            ? await readChat(chat, opts.all ? { known: db.shortcodesFrom(chat) } : { todayOnly: true })
+            : readInput(input, config.authorizedThreads);
         const tally = { added: 0, requeued: 0, duplicate: 0 };
-        for (const item of items) tally[db.add({ ...item, shared_by: item.shared_by ?? values.from }, source)]++;
+        for (const item of items) tally[db.add({ ...item, shared_by: item.shared_by ?? opts.from }, source)]++;
         if (threads) printThreads(threads);
         log.success(`${input}: ${tally.added} added, ${tally.requeued} re-queued, ${tally.duplicate} already known.`);
     }
+}
+
+function groupChats(): string[] {
+    const bad = config.groupChats.filter(chat => !threadUrl(chat));
+    if (bad.length) throw new BotError('CONFIG', `GROUP_CHATS takes chat links (https://www.instagram.com/direct/t/<id>/), not: ${bad.join(', ')}`);
+    return config.groupChats;
+}
+
+async function cmdAdd(args: string[]): Promise<void> {
+    const { values, positionals } = parseArgs({ args, options: { from: { type: 'string' }, all: { type: 'boolean' } }, allowPositionals: true });
+    const inputs = positionals.length ? positionals : groupChats();
+    if (inputs.length === 0) {
+        throw new BotError('INPUT', 'Nothing to add. Example: npm run add -- https://www.instagram.com/reel/XXXXXXXXXXX/ (or set GROUP_CHATS in .env).');
+    }
+    await queueInputs(new ReelStore(config.dbFile), inputs, { from: values.from, all: values.all });
 }
 
 // ----- opening reels (review and auto)
@@ -298,33 +312,50 @@ async function cmdReview(args: string[]): Promise<void> {
 
 // ----- auto
 
+/** A guide phrase for the reel's category, judged by the AI from its caption and cover; a general one without it. */
+async function fittingPhrase(ai: AICommentGenerator | undefined, info: { caption?: string; imageUrl?: string }, recent: string[]) {
+    let entry: GuideEntry | undefined;
+    if (ai) {
+        try {
+            entry = COMMENT_GUIDE[await ai.categorize(info.caption ?? '', info.imageUrl, COMMENT_GUIDE.map(g => `${g.category} (${g.about})`))];
+        } catch (e) {
+            log.warn(`${firstLine(e)} Using a general phrase.`, 'AI');
+        }
+    }
+    return { comment: guidePhrase(entry, recent), category: entry?.category };
+}
+
 async function cmdAuto(args: string[]): Promise<void> {
     const { values } = parseArgs({ args, options: { 'dry-run': { type: 'boolean' } } });
     const dryRun = config.dryRun || values['dry-run'] === true;
     const db = new ReelStore(config.dbFile);
+    const ai = config.geminiApiKey ? new AICommentGenerator(config.geminiApiKey, config.geminiModel) : undefined;
     log.header(
         dryRun
-            ? '----- Auto: DRY RUN (each comment is typed and cleared again; nothing is posted or recorded) -----'
-            : `----- Auto: LIVE (posting comments by itself, at least ${config.commentGapSeconds}s apart) -----`
+            ? "----- Auto: DRY RUN (queues today's reels; finds each Like button and types each comment, then clears it - nothing is liked or posted) -----"
+            : `----- Auto: LIVE (likes and comments by itself, at least ${config.commentGapSeconds}s apart) -----`
     );
-    // Comments you approved in a review go first. Ones marked "posting" were interrupted mid-post and
-    // may be live already, so they are never retried automatically.
-    const pending = [...db.list('approved').filter(row => !row.submission), ...db.list('queued')];
-    log.info(`${pending.length} reel(s) waiting. Phrases: ${config.commentPhrases.join(' | ')}`);
-    let budget = config.dailyLimit - db.processedSince(startOfToday());
-    let last = db.recentComments(1)[0];
-    let lastLoad = 0;
+    if (!ai) log.warn("GEMINI_API_KEY is not set - comments use the guide's general phrases instead of ones that fit each reel.", 'CONFIG');
     let session: Session | undefined;
-    // Comments per account today: from the database, then counted in this run (a dry run records nothing).
-    const today = startOfToday();
-    const perAuthor = new Map<string, number>();
-    const commentsOn = (author: string) => perAuthor.get(author) ?? db.commentsOnAuthorSince(author, today);
-    const heldBack = (row: ReelRow, author: string | null | undefined) => {
-        if (!author || commentsOn(author) < config.authorDailyLimit) return false;
-        log.info(`${row.url} (@${author}): already ${config.authorDailyLimit} comment(s) on their posts today (AUTHOR_DAILY_LIMIT) - left for another day.`);
-        return true;
-    };
     try {
+        const chats = groupChats();
+        if (chats.length) await queueInputs(db, chats);
+        // Comments you approved in a review go first. Ones marked "posting" were interrupted mid-post and
+        // may be live already, so they are never retried automatically.
+        const pending = [...db.list('approved').filter(row => !row.submission), ...db.list('queued')];
+        log.info(`${pending.length} reel(s) waiting.`);
+        let budget = config.dailyLimit - db.processedSince(startOfToday());
+        const recent = db.recentComments(5); // avoided when there is a choice
+        let lastLoad = 0;
+        // Comments per account today: from the database, then counted in this run (a dry run records nothing).
+        const today = startOfToday();
+        const perAuthor = new Map<string, number>();
+        const commentsOn = (author: string) => perAuthor.get(author) ?? db.commentsOnAuthorSince(author, today);
+        const heldBack = (row: ReelRow, author: string | null | undefined) => {
+            if (!author || commentsOn(author) < config.authorDailyLimit) return false;
+            log.info(`${row.url} (@${author}): already ${config.authorDailyLimit} comment(s) on their posts today (AUTHOR_DAILY_LIMIT) - left for another day.`);
+            return true;
+        };
         for (const row of pending) {
             if (stop.signal.aborted) break;
             if (heldBack(row, row.author)) continue; // author known from an earlier run: no need to open it
@@ -347,29 +378,37 @@ async function cmdAuto(args: string[]): Promise<void> {
                 save({ author, caption }); // stays queued; next time it is held back without opening it
                 continue;
             }
+            const where = `${row.url}${author ? ` (@${author})` : ''}`;
+            const screenshotOnError = (name: string) => async (e: unknown) => {
+                await session!.page.screenshot({ path: path.join(logsDir, `${name}_${row.shortcode}.png`) }).catch(() => {});
+                throw e;
+            };
+
+            const liked: LikeOutcome = await likePost(session.page, { dryRun }).catch(screenshotOnError('like'));
+            if (liked === 'liked') save({ liked_at: new Date().toISOString() });
+            if (liked === 'unconfirmed') log.warn(`${where}: clicked Like, but the heart did not turn red - check the reel.`);
+
             const fresh = row.status === 'queued' || !row.final_comment;
-            const comment = fresh ? pickPhrase(config.commentPhrases, last) : row.final_comment!;
+            const { comment, category } = fresh ? await fittingPhrase(ai, info, recent) : { comment: row.final_comment!, category: undefined };
             const now = new Date().toISOString();
             save({ author, caption, processed_at: now, ...(fresh ? { proposed_comment: comment, decided_at: now } : {}) });
 
-            let outcome: CommentOutcome;
-            try {
-                outcome = dryRun ? await postComment(session.page, comment, { dryRun }) : await postAndRecord(session.page, comment, save);
-            } catch (e) {
-                await session.page.screenshot({ path: path.join(logsDir, `comment_${row.shortcode}.png`) }).catch(() => {});
-                throw e;
-            }
-            const where = `${row.url}${info.author ? ` (@${info.author})` : ''}`;
+            const outcome: CommentOutcome = await (dryRun ? postComment(session.page, comment, { dryRun }) : postAndRecord(session.page, comment, save)).catch(
+                screenshotOnError('comment')
+            );
             if (outcome === 'comments_off') {
-                log.info(`${where}: comments are turned off - skipped.`);
+                log.info(`${where}: comments are turned off - ${liked === 'liked' ? 'liked only' : 'skipped'}.`);
                 continue;
             }
             if (outcome === 'unconfirmed') {
                 throw new BotError('COMMENT_FAILED', `Clicked Post on ${where}, but the comment did not show up. Check the reel; it will not be retried. Stopping.`);
             }
             if (author) perAuthor.set(author, commentsOn(author) + 1);
-            last = comment;
-            log.success(dryRun ? `Dry run: would post "${comment}" on ${where}.` : `Posted "${comment}" on ${where}.`);
+            recent.unshift(comment);
+            const done = dryRun
+                ? liked === 'already_liked' ? 'Dry run: already liked; would post' : 'Dry run: would like and post'
+                : liked === 'liked' ? 'Liked and posted' : liked === 'already_liked' ? 'Already liked; posted' : 'Posted';
+            log.success(`${done} "${comment}"${category ? ` (${category})` : ''} on ${where}.`);
         }
     } catch (e) {
         if (!isAbort(e)) throw e;
@@ -395,8 +434,9 @@ function cmdStatus(): void {
         const when = new Date(row.submitted_at ?? row.decided_at ?? row.processed_at ?? row.queued_at).toLocaleString();
         const who = row.author ? `  @${row.author}` : '';
         const comment = row.final_comment ? `  "${row.final_comment}"` : '';
+        const liked = row.liked_at ? '  liked' : '';
         const error = row.error ? chalk.gray(`  ${row.error}`) : '';
-        console.log(`${when}  ${row.status.padEnd(11)} ${row.url}${who}${comment}${error}`);
+        console.log(`${when}  ${row.status.padEnd(11)} ${row.url}${who}${liked}${comment}${error}`);
     }
     log.info(`Today: ${db.processedSince(startOfToday())}/${config.dailyLimit} reels processed. Database: ${path.relative(process.cwd(), config.dbFile)}`);
 }

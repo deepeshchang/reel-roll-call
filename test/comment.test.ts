@@ -1,7 +1,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Page } from 'playwright';
-import { pickPhrase, postAndRecord, postComment } from '../src/comment';
+import { likePost, postAndRecord, postComment } from '../src/comment';
 import { ReelStore } from '../src/db';
 import { BotError, ErrorCategory } from '../src/logger';
 import { htmlPage, offlinePage, Respond, serveHtml, useBrowser } from './helpers';
@@ -180,19 +180,78 @@ describe('postAndRecord', () => {
     });
 });
 
-describe('pickPhrase', () => {
-    test('never uses the same phrase twice in a row', () => {
-        const phrases = ['Nice content 😊', 'Nice content 🙌', 'Cool content <3'];
-        let last: string | undefined;
-        for (let i = 0; i < 100; i++) {
-            const next = pickPhrase(phrases, last);
-            assert.ok(phrases.includes(next), next);
-            assert.notEqual(next, last);
-            last = next;
+const LIKE_ENDPOINT = '/api/v1/web/likes/123/like/';
+type LikeReply = 'ok' | 'blocked' | 'silent';
+
+// The post layout's like button: the post's own heart (24px) is in the action bar after the comments,
+// whose small hearts (12px) carry the same "Like" label. A click sends one request; "ok" turns it into "Unlike".
+const postWithHeart = (label: 'Like' | 'Unlike') => `
+<main><article>
+  <ul><li>someone_else <span>Great shot</span> <div role="button" id="comment-like"><svg aria-label="Like" role="img" width="12" height="12"></svg></div></li></ul>
+  <section>
+    <span><div role="button" tabindex="0" id="like"><svg aria-label="${label}" role="img" width="24" height="24"><title>${label}</title></svg></div></span>
+    <span><div role="button" tabindex="0"><svg aria-label="Comment" role="img" width="24" height="24"></svg></div></span>
+  </section>
+</article></main>
+<script>
+  const like = document.getElementById('like');
+  like.addEventListener('click', async () => {
+    const svg = like.querySelector('svg');
+    const liking = svg.getAttribute('aria-label') === 'Like';
+    const { reply } = await (await fetch('${LIKE_ENDPOINT}', { method: 'POST', body: liking ? 'like' : 'unlike' })).json();
+    if (reply === 'blocked') return document.body.insertAdjacentHTML('beforeend', '<div role="dialog"><h3>Try Again Later</h3><p>We restrict certain activity to protect our community.</p></div>');
+    if (reply === 'ok') svg.setAttribute('aria-label', liking ? 'Unlike' : 'Like');
+  });
+  document.getElementById('comment-like').addEventListener('click', () => fetch('${LIKE_ENDPOINT}', { method: 'POST', body: 'comment' }));
+</script>`;
+
+/** Opens a post page and records every like request sent from it. */
+async function openFakePost(body: string, reply: LikeReply = 'ok') {
+    const likes: string[] = [];
+    const page = await offlinePage(async (route, url) => {
+        if (url.pathname === LIKE_ENDPOINT) {
+            likes.push(route.request().postData() ?? '');
+            return route.fulfill({ json: { reply } });
         }
+        return serveHtml(route, htmlPage(body));
+    });
+    await page.goto(REEL);
+    return { page, likes };
+}
+
+describe('likePost', () => {
+    test("likes the post with one click on its own heart, not a comment's", async () => {
+        const { page, likes } = await openFakePost(postWithHeart('Like'));
+        assert.equal(await likePost(page), 'liked');
+        assert.deepEqual(likes, ['like']);
     });
 
-    test('repeats the only phrase there is', () => {
-        assert.equal(pickPhrase(['Cool content <3'], 'Cool content <3'), 'Cool content <3');
+    test('never clicks an already-liked post - that would unlike it', async () => {
+        const { page, likes } = await openFakePost(postWithHeart('Unlike'));
+        assert.equal(await likePost(page), 'already_liked');
+        assert.deepEqual(likes, []);
+    });
+
+    test('dry run finds the Like button without clicking it', async () => {
+        const { page, likes } = await openFakePost(postWithHeart('Like'));
+        assert.equal(await likePost(page, { dryRun: true }), 'dry_run');
+        assert.deepEqual(likes, []);
+    });
+
+    test('raises RATE_LIMITED when Instagram blocks the like', async () => {
+        const { page, likes } = await openFakePost(postWithHeart('Like'), 'blocked');
+        await rejectsWith(likePost(page), 'RATE_LIMITED');
+        assert.deepEqual(likes, ['like']);
+    });
+
+    test('clicks only once when the like does not show up', async () => {
+        const { page, likes } = await openFakePost(postWithHeart('Like'), 'silent');
+        assert.equal(await likePost(page, { timeoutMs: 3000 }), 'unconfirmed');
+        assert.deepEqual(likes, ['like']);
+    });
+
+    test('raises UNKNOWN_PAGE when there is no Like button', async () => {
+        const { page } = await openFakePost('<main><article>post</article></main>');
+        await rejectsWith(likePost(page, { timeoutMs: 800 }), 'UNKNOWN_PAGE');
     });
 });

@@ -23,6 +23,7 @@ export interface ReelRow {
     processed_at: string | null;
     decided_at: string | null;
     submitted_at: string | null;
+    liked_at: string | null;
 }
 
 // Lifecycle: queued -> proposed (opened + drafted) -> approved | skipped -> submitted.
@@ -46,14 +47,15 @@ CREATE TABLE IF NOT EXISTS reels (
     queued_at        TEXT NOT NULL,
     processed_at     TEXT,               -- opened + drafted; counts toward DAILY_LIMIT
     decided_at       TEXT,
-    submitted_at     TEXT
+    submitted_at     TEXT,
+    liked_at         TEXT                -- when auto mode liked it
 )`;
 
 type Editable = Omit<ReelRow, 'shortcode' | 'queued_at'>;
 
 const EDITABLE = new Set<string>([
     'url', 'source', 'conversation', 'shared_by', 'shared_at', 'author', 'caption', 'status',
-    'proposed_comment', 'final_comment', 'submission', 'error', 'processed_at', 'decided_at', 'submitted_at',
+    'proposed_comment', 'final_comment', 'submission', 'error', 'processed_at', 'decided_at', 'submitted_at', 'liked_at',
 ]);
 
 export class ReelStore {
@@ -64,6 +66,10 @@ export class ReelStore {
         this.db = new DatabaseSync(file);
         if (file !== ':memory:') fs.chmodSync(file, 0o600);
         this.db.exec(SCHEMA);
+        // Databases created before likes were added lack the column.
+        if (!this.db.prepare('PRAGMA table_info(reels)').all().some(column => column.name === 'liked_at')) {
+            this.db.exec('ALTER TABLE reels ADD COLUMN liked_at TEXT');
+        }
     }
 
     add(item: Shared, source: string): 'added' | 'requeued' | 'duplicate' {

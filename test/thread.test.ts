@@ -1,19 +1,22 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readThread, threadUrl } from '../src/thread';
+import { dayOf, readThread, threadUrl } from '../src/thread';
 import { BotError, ErrorCategory } from '../src/logger';
 import { htmlPage, offlinePage, serveHtml, useBrowser } from './helpers';
 
 useBrowser();
 
 const CHAT = 'https://www.instagram.com/direct/t/340282366841710300949128137443944319108/';
-const fast = { timeoutMs: 3000, loadWaitMs: 600 };
+const fast = { timeoutMs: 3000, loadWaitMs: 1500 }; // generous: the machine may be busy
 
 // Chat rows. A shared reel is a card linking to the reel; a pasted link is plain text.
 const shared = (href: string) => `<div role="row"><a href="${href}" role="link"><img alt="" width="60" height="60"><span>creator</span></a></div>`;
 const said = (html: string) => `<div role="row"><div dir="auto">${html}</div></div>`;
 
 const chatter = [said('haha'), said('ok')];
+// A day marker between message groups; Instagram may split it over several elements.
+const marker = (...parts: string[]) => `<div role="row"><div style="text-align: center">${parts.map(part => `<span>${part}</span>`).join(' ')}</div></div>`;
+const todayOnly = { ...fast, todayOnly: true };
 
 // Oldest batch first. The newest batch shares OLD111 again; /someone/ is a profile link, not a reel.
 const HISTORY = [
@@ -78,6 +81,16 @@ describe('threadUrl', () => {
     });
 });
 
+describe('dayOf', () => {
+    test("tells today's markers from earlier days' and from ordinary messages", () => {
+        for (const text of ['9:41 PM', '12:05 am', 'Today 9:41 PM', 'Today at 21:41', '9:41\u202fPM']) assert.equal(dayOf(text), 'today', text);
+        for (const text of ['Yesterday 11:02 PM', 'Yesterday at 23:02', 'Mon 9:41 PM', 'Oct 7, 9:41 PM', 'Oct 7, 2025, 9:41 PM', '7 Oct 2025, 21:41', '10/07/25, 9:41 PM']) {
+            assert.equal(dayOf(text), 'earlier', text);
+        }
+        for (const text of ['meet at 9:30', 'ok', 'yesterday', 'Sat']) assert.equal(dayOf(text), undefined, text);
+    });
+});
+
 describe('readThread', () => {
     test('collects every shared reel and pasted link while scrolling up through the history', async () => {
         const items = await readThread(await chatServing(chatPage(HISTORY)), CHAT, fast);
@@ -120,6 +133,33 @@ describe('readThread', () => {
         const known = new Set(['KNOWN1', 'KNOWN2', 'KNOWN3', 'KNOWN4']);
         const items = await readThread(await chatServing(chatPage(history)), CHAT, { ...fast, known });
         assert.deepEqual(codes(items), ['KNOWN1', 'KNOWN2', 'KNOWN3', 'KNOWN4', 'NEW111', 'NEW222']);
+    });
+
+    test("todayOnly: returns only today's reels, reading back to the first earlier day marker", async () => {
+        const history = [
+            [shared('/reel/OLDEST1/'), ...chatter],
+            [marker('Yesterday', '11:40 PM'), shared('/reel/YDAY111/'), said('ok')],
+            [marker('10:02 AM'), shared('/reel/TODAY11/'), said('https://www.instagram.com/reel/TODAY22/'), said('ok')],
+            [marker('2:30 PM'), shared('/reel/TODAY33/'), ...chatter],
+        ];
+        const items = await readThread(await chatServing(chatPage(history)), CHAT, todayOnly);
+        assert.deepEqual(codes(items), ['TODAY11', 'TODAY22', 'TODAY33']);
+    });
+
+    test("todayOnly: dates reels whose marker comes into view only after they scrolled out of it", async () => {
+        const history = [
+            [marker('Yesterday', '8:00 PM'), shared('/reel/YDAY111/'), ...chatter],
+            [marker('9:00 AM'), shared('/reel/TODAY11/'), ...chatter],
+            [shared('/reel/TODAY22/'), ...chatter], // no marker of their own: still the 9:00 AM group
+            [shared('/reel/TODAY33/'), ...chatter],
+        ];
+        const items = await readThread(await chatServing(chatPage(history)), CHAT, todayOnly);
+        assert.deepEqual(codes(items), ['TODAY11', 'TODAY22', 'TODAY33']);
+    });
+
+    test('todayOnly: reads a short chat that does not scroll', async () => {
+        const items = await readThread(await chatServing(chatPage([[marker('9:00 AM'), shared('/reel/ONLY11/')]])), CHAT, todayOnly);
+        assert.deepEqual(codes(items), ['ONLY11']);
     });
 
     test('raises SESSION_EXPIRED when the chat bounces to the login page', async () => {

@@ -6,17 +6,53 @@ import { BotError } from './logger';
 import { describePage } from './reel';
 
 export type CommentOutcome = 'posted' | 'unconfirmed' | 'comments_off' | 'dry_run';
+export type LikeOutcome = 'liked' | 'already_liked' | 'unconfirmed' | 'dry_run';
 export type Save = (fields: Parameters<ReelStore['update']>[1]) => void;
 
 const COMMENTS_OFF_TEXT = /commenting (has been|is) (turned off|limited)|comments on this post (have been|are) (limited|turned off)/i;
 const REFUSED_TEXT = /could(n.t| not) post( your)? comment|unable to post comment/i;
 const SETTLE_MS = 2000; // a refusal can replace the optimistically shown comment a moment later
 
-/** A phrase at random - never the one used last, when there is a choice. */
-export function pickPhrase(phrases: string[], last?: string): string {
-    const fresh = phrases.filter(phrase => phrase !== last);
-    const pool = fresh.length ? fresh : phrases;
-    return pool[Math.floor(Math.random() * pool.length)];
+/**
+ * Likes the post open in `page` with one click on its heart - never when it is already liked, since a
+ * click would unlike it. Throws RATE_LIMITED (Instagram blocked it) or UNKNOWN_PAGE (no Like button).
+ */
+export async function likePost(page: Page, opts: { dryRun?: boolean; timeoutMs?: number } = {}): Promise<LikeOutcome> {
+    const timeout = opts.timeoutMs ?? 20000;
+    // The post's own heart is the biggest: each comment has a small one with the same label.
+    const hearts = page.locator('svg:is([aria-label="Like"], [aria-label="Unlike"])').filter({ visible: true });
+    const postHeart = async () => {
+        const widths = await hearts.evaluateAll(svgs => svgs.map(svg => svg.getBoundingClientRect().width));
+        return widths.length ? hearts.nth(widths.indexOf(Math.max(...widths))) : undefined;
+    };
+    const ready = Date.now() + timeout;
+    let heart = await postHeart();
+    while (!heart) {
+        if (Date.now() >= ready) {
+            throw new BotError('UNKNOWN_PAGE', `No Like button on the reel page; Instagram's page may have changed. Nothing was liked. ${await describePage(page)}`);
+        }
+        await sleep(250);
+        heart = await postHeart();
+    }
+    if ((await heart.getAttribute('aria-label')) === 'Unlike') return 'already_liked';
+    if (opts.dryRun) return 'dry_run';
+
+    const blocked = page.getByText(RATE_LIMIT_TEXT);
+    const before = await blocked.count();
+    try {
+        await heart.click({ timeout });
+    } catch (e) {
+        throw new BotError('UNKNOWN_PAGE', `Could not click Like (${firstLine(e)}). Nothing was liked.`);
+    }
+    const confirmBy = Date.now() + Math.min(timeout, 10000);
+    for (;;) {
+        if ((await blocked.count()) > before) {
+            throw new BotError('RATE_LIMITED', 'Instagram blocked the like ("Try again later"). Stopping; wait a few hours, then lower DAILY_LIMIT or raise COMMENT_GAP_SECONDS.');
+        }
+        if ((await (await postHeart())?.getAttribute('aria-label')) === 'Unlike') return 'liked';
+        if (Date.now() >= confirmBy) return 'unconfirmed'; // not clicked again: a second click could unlike it
+        await sleep(250);
+    }
 }
 
 /**
