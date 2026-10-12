@@ -116,6 +116,10 @@ export class ReelStore {
         return last == null ? undefined : String(last);
     }
 
+    commentsOnAuthorSince(author: string, isoTime: string): number {
+        return Number(this.db.prepare('SELECT COUNT(*) AS n FROM reels WHERE author = ? AND submitted_at >= ?').get(author, isoTime)?.n ?? 0);
+    }
+
     recentComments(limit: number): string[] {
         return this.db
             .prepare('SELECT final_comment FROM reels WHERE final_comment IS NOT NULL ORDER BY decided_at DESC LIMIT ?')

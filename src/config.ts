@@ -45,6 +45,8 @@ export const config = {
     commentPhrases: phrases.length ? phrases : ['Nice content 😊', 'Nice content 🙌', 'Nice content 🔥', 'Cool content <3'],
     /** Minimum gap between two posted comments, also across runs. */
     commentGapSeconds: positiveInt('COMMENT_GAP_SECONDS', 180),
+    /** `npm run auto` comments at most this many times a day on posts by the same account. */
+    authorDailyLimit: positiveInt('AUTHOR_DAILY_LIMIT', 2),
     /** DM conversations (export folder names or titles) explicitly authorised for import. */
     authorizedThreads: list(env.AUTHORIZED_THREADS),
     sessionFile: path.join(dataDir, 'cookies', `${username.replace(/[^A-Za-z0-9._@+-]/g, '_') || 'default'}.json`),

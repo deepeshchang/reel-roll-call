@@ -17,7 +17,8 @@ Built on Playwright, using your own logged-in browser session.
 2. **Comment.**
    - `npm run auto`: opens each queued reel, types one of `COMMENT_PHRASES` (random, never the same one
      twice in a row) and clicks Post. Comments go out at least `COMMENT_GAP_SECONDS` apart, even across
-     runs, and at most `DAILY_LIMIT` per day.
+     runs, at most `DAILY_LIMIT` per day, and at most `AUTHOR_DAILY_LIMIT` per day on the same account's
+     posts (the rest of that account's reels wait for a later day).
    - `npm run review`: shows each reel with an AI draft. You approve, edit, regenerate or skip it, then
      post it yourself from your browser.
 
@@ -30,7 +31,8 @@ so if a run is cut off mid-post, that reel is not retried.
 - **Auto mode is against Instagram's Terms of Use.** Instagram has no API for commenting on other
   people's reels, so auto mode drives your logged-in browser. The same few phrases on many reels look
   like spam to Instagram. Expect possible comment blocks ("Try again later"), hidden comments, or account
-  restrictions. Keep `DAILY_LIMIT` low and `COMMENT_GAP_SECONDS` high.
+  restrictions. Keep `DAILY_LIMIT` and `AUTHOR_DAILY_LIMIT` low and `COMMENT_GAP_SECONDS` high. Many
+  comments on one account's posts in a short time look the most like spam.
 - **The bot backs off rather than fighting Instagram.** At the first "Try again later", refused comment,
   security check or unrecognised page, it stops. It never solves CAPTCHAs or 2FA, never spoofs a browser
   fingerprint, and never likes, follows or messages anyone.
@@ -72,6 +74,7 @@ so if a run is cut off mid-post, that reel is not retried.
 | `COMMENT_PHRASES` | no | Auto-mode comments, separated by `\|`. Default: `Nice content 😊\|Nice content 🙌\|Nice content 🔥\|Cool content <3`. |
 | `COMMENT_GAP_SECONDS` | no | Minimum time between two posted comments, also across runs (default 180). |
 | `DAILY_LIMIT` | no | Reels opened per day, so also the most comments per day (default 20). |
+| `AUTHOR_DAILY_LIMIT` | no | Most auto comments per day on posts by the same account (default 2). |
 | `ACTION_DELAY_SECONDS` | no | Minimum gap between Instagram page loads (default 30). |
 | `HEADLESS` | no | `false` shows the browser while it works (default `true`). |
 | `GEMINI_API_KEY` | no | Google AI Studio key for review-mode drafts. Without it you write every comment. |

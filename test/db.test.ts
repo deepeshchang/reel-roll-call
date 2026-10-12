@@ -72,6 +72,16 @@ describe('ReelStore', () => {
         assert.equal(db.lastSubmittedAt(), '2026-10-12T09:03:00.000Z');
     });
 
+    test("counts today's comments on one account's posts, for the per-account limit", () => {
+        const db = new ReelStore(':memory:');
+        for (const code of ['AAA111', 'BBB222', 'CCC333', 'DDD444']) db.add(reel(code), 'manual');
+        db.update('AAA111', { author: 'creator', status: 'submitted', submitted_at: '2026-10-11T23:59:59.000Z' });
+        db.update('BBB222', { author: 'creator', status: 'submitted', submitted_at: '2026-10-12T09:00:00.000Z' });
+        db.update('CCC333', { author: 'someone_else', status: 'submitted', submitted_at: '2026-10-12T09:03:00.000Z' });
+        db.update('DDD444', { author: 'creator', processed_at: '2026-10-12T09:06:00.000Z' }); // opened, not commented
+        assert.equal(db.commentsOnAuthorSince('creator', '2026-10-12T00:00:00.000Z'), 1);
+    });
+
     test('returns approved comments newest first, so the AI can avoid repeating them', () => {
         const db = new ReelStore(':memory:');
         for (const code of ['AAA111', 'BBB222', 'CCC333']) db.add(reel(code), 'manual');

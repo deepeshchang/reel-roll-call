@@ -28,7 +28,8 @@ const USAGE = `Usage: npm run <command>   (or: npm start -- <command>)
                           "Download your information" export folder (authorised chats only).
                           --from "<name>"  record who shared manually added links.
   auto [-- --dry-run]     Comment on every queued reel by itself with one of COMMENT_PHRASES, at least
-                          COMMENT_GAP_SECONDS apart and at most DAILY_LIMIT a day.
+                          COMMENT_GAP_SECONDS apart, at most DAILY_LIMIT a day and AUTHOR_DAILY_LIMIT
+                          a day on the same account's posts.
   review [-- --dry-run]   Open queued reels, draft a comment for each, and ask you to approve it.
   status                  Show the queue and recent decisions.
 
@@ -314,9 +315,19 @@ async function cmdAuto(args: string[]): Promise<void> {
     let last = db.recentComments(1)[0];
     let lastLoad = 0;
     let session: Session | undefined;
+    // Comments per account today: from the database, then counted in this run (a dry run records nothing).
+    const today = startOfToday();
+    const perAuthor = new Map<string, number>();
+    const commentsOn = (author: string) => perAuthor.get(author) ?? db.commentsOnAuthorSince(author, today);
+    const heldBack = (row: ReelRow, author: string | null | undefined) => {
+        if (!author || commentsOn(author) < config.authorDailyLimit) return false;
+        log.info(`${row.url} (@${author}): already ${config.authorDailyLimit} comment(s) on their posts today (AUTHOR_DAILY_LIMIT) - left for another day.`);
+        return true;
+    };
     try {
         for (const row of pending) {
             if (stop.signal.aborted) break;
+            if (heldBack(row, row.author)) continue; // author known from an earlier run: no need to open it
             if (budget-- <= 0) {
                 log.warn(`Daily limit reached (DAILY_LIMIT=${config.dailyLimit}); the rest stays queued for tomorrow.`);
                 break;
@@ -330,10 +341,16 @@ async function cmdAuto(args: string[]): Promise<void> {
             const save: Save = dryRun ? () => {} : fields => db.update(row.shortcode, fields);
             const info = await openQueued(session.page, row, save);
             if (!info) continue;
+            const author = info.author ?? row.author;
+            const caption = info.caption ?? row.caption;
+            if (heldBack(row, author)) {
+                save({ author, caption }); // stays queued; next time it is held back without opening it
+                continue;
+            }
             const fresh = row.status === 'queued' || !row.final_comment;
             const comment = fresh ? pickPhrase(config.commentPhrases, last) : row.final_comment!;
             const now = new Date().toISOString();
-            save({ author: info.author ?? row.author, caption: info.caption ?? row.caption, processed_at: now, ...(fresh ? { proposed_comment: comment, decided_at: now } : {}) });
+            save({ author, caption, processed_at: now, ...(fresh ? { proposed_comment: comment, decided_at: now } : {}) });
 
             let outcome: CommentOutcome;
             try {
@@ -350,6 +367,7 @@ async function cmdAuto(args: string[]): Promise<void> {
             if (outcome === 'unconfirmed') {
                 throw new BotError('COMMENT_FAILED', `Clicked Post on ${where}, but the comment did not show up. Check the reel; it will not be retried. Stopping.`);
             }
+            if (author) perAuthor.set(author, commentsOn(author) + 1);
             last = comment;
             log.success(dryRun ? `Dry run: would post "${comment}" on ${where}.` : `Posted "${comment}" on ${where}.`);
         }
