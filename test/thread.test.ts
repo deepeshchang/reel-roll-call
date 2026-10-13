@@ -157,6 +157,18 @@ describe('readThread', () => {
         assert.deepEqual(codes(items), ['TODAY11', 'TODAY22', 'TODAY33']);
     });
 
+    test("todayOnly: opens today's shared reel cards (no link in the page) to get their address, skipping photos", async () => {
+        const card = (code: string) => `<div role="row" style="height: 360px"><div role="button" onclick="location.href='/p/${code}/'"><img src="/media/${code}.jpg" width="200" height="355" alt=""><svg aria-label="Clip" width="16" height="16"></svg></div></div>`;
+        const photo = `<div role="row" style="height: 360px"><div role="button"><img src="/media/photo.jpg" width="200" height="355" alt=""></div></div>`;
+        const history = [
+            [marker('Yesterday', '9:00 PM'), card('YCARD11'), said('ok')],
+            [marker('10:00 AM'), card('CARD111'), photo, said('nice'), card('CARD222')],
+        ];
+        const items = await readThread(await chatServing(chatPage(history)), CHAT, todayOnly);
+        assert.deepEqual(codes(items), ['CARD111', 'CARD222']);
+        assert.equal(items.find(item => item.shortcode === 'CARD111')?.url, 'https://www.instagram.com/p/CARD111/');
+    });
+
     test('todayOnly: reads a short chat that does not scroll', async () => {
         const items = await readThread(await chatServing(chatPage([[marker('9:00 AM'), shared('/reel/ONLY11/')]])), CHAT, todayOnly);
         assert.deepEqual(codes(items), ['ONLY11']);

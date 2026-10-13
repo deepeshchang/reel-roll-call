@@ -63,46 +63,7 @@ export interface ThreadOptions {
  */
 export async function readThread(page: Page, url: string, opts: ThreadOptions = {}): Promise<Shared[]> {
     const timeout = opts.timeoutMs ?? 30000;
-    try {
-        await page.goto(`${url}?hl=en`, { waitUntil: 'domcontentloaded', timeout });
-    } catch (e) {
-        throw new BotError('NETWORK', `Could not load ${url} (${firstLine(e)}).`);
-    }
-
-    // The message box. Live (2026-10-12) it is a rich-text editor labelled only by aria-placeholder="Message...",
-    // which gives it no accessible name, so match the label attributes directly.
-    const composer = page
-        .locator(':is([role="textbox"], [contenteditable="true"], textarea):is([aria-label^="message" i], [aria-placeholder^="message" i], [placeholder^="message" i])')
-        .filter({ visible: true })
-        .first();
-    const notNow = page.getByRole('button', { name: /^not now$/i });
-    const dismissPrompt = async () => {
-        if (await isVisible(notNow)) await notNow.first().click({ timeout: 5000 }).catch(() => {});
-    };
-    const deadline = Date.now() + timeout;
-    while (!(await isVisible(composer))) {
-        assertNotBounced(page.url());
-        if (Date.now() >= deadline) {
-            throw new BotError('UNKNOWN_PAGE', `The chat ${url} did not open (no message box). Check the link, and that you are still in that chat. ${await describePage(page)}`);
-        }
-        await sleep(250);
-    }
-    await dismissPrompt();
-
-    // The message list is the scrollable area just above the message box.
-    const scrollable = await composer.evaluate(box => {
-        const { left, width, top } = box.getBoundingClientRect();
-        const scrolls = (el: Element) => el.scrollHeight > el.clientHeight + 10 && /auto|scroll/.test(getComputedStyle(el).overflowY);
-        for (const dy of [40, 80, 140]) {
-            for (let el = document.elementFromPoint(left + width / 2, top - dy); el; el = el.parentElement) {
-                if (scrolls(el)) {
-                    el.setAttribute('data-bot-messages', '');
-                    return true;
-                }
-            }
-        }
-        return false;
-    });
+    const { scrollable, dismissPrompt } = await openChat(page, url, timeout);
 
     const found = new Map<string, Shared>();
     let knownInARow = 0;
@@ -113,7 +74,8 @@ export async function readThread(page: Page, url: string, opts: ThreadOptions = 
     let reachedEarlier = false;
     const markers: string[] = [];
     const unrecognised = new Set<string>();
-    const codesIn = (token: Token) => (token.kind === 'link' ? extractRefs(token.text).map(ref => ref.shortcode) : []);
+    const codesIn = (token: Token) =>
+        token.kind === 'link' ? extractRefs(token.text).map(ref => ref.shortcode) : token.kind === 'card' ? [`card:${token.text}`] : [];
     const date = (tokens: Token[]) => {
         const rendered = new Set(tokens.flatMap(codesIn));
         let open = undated.filter(code => !rendered.has(code)); // scrolled out of view: below everything shown
@@ -156,11 +118,7 @@ export async function readThread(page: Page, url: string, opts: ThreadOptions = 
         knownInARow = unknown ? 0 : knownInARow + fresh;
         if (opts.todayOnly) date(tokens);
     };
-    const signature = () =>
-        page.evaluate(() => {
-            const el = document.querySelector<HTMLElement>('[data-bot-messages]');
-            return el ? `${el.scrollTop}:${el.scrollHeight}:${el.innerText.length}` : '';
-        });
+    const signature = () => messagesSignature(page);
 
     await gather();
     // Chats render only a window of messages, so links are gathered after every scroll. Two scrolls in a
@@ -170,17 +128,29 @@ export async function readThread(page: Page, url: string, opts: ThreadOptions = 
     for (; scrollable && idle < 2 && knownInARow < KNOWN_IN_A_ROW && !reachedEarlier && i < (opts.maxScrolls ?? 1000) && !opts.signal?.aborted; i++) {
         await dismissPrompt();
         const before = await signature();
-        // Negative because chat lists usually scroll in reverse; a normal list just clamps to 0 (its top).
-        await page.evaluate(() => {
-            const el = document.querySelector('[data-bot-messages]');
-            if (el) el.scrollTop = -el.scrollHeight;
-        });
+        await scrollUp(page);
         idle = (await changes(signature, before, opts.loadWaitMs ?? 4000)) ? 0 : idle + 1;
         await gather();
         if (i % 10 === 9) opts.logger?.info(`Still scrolling up: ${found.size} link(s) so far.`);
     }
     const why = reachedEarlier ? ', back to the previous day' : knownInARow >= KNOWN_IN_A_ROW ? ', up to reels queued before' : '';
     const items = [...found.values()].filter(item => !opts.todayOnly || today.has(item.shortcode));
+    const cards = [...today].filter(code => code.startsWith('card:')).map(code => code.slice(5));
+    if (cards.length) opts.logger?.info(`Opening ${cards.length} shared reel card(s) from today to get their links...`);
+    let missed: string[] = [];
+    for (const pass of [cards, missed]) {
+        for (const image of pass === missed ? [...missed.splice(0)] : pass) {
+            if (opts.signal?.aborted) break;
+            const item = await openCard(page, url, image, { ...opts, maxScrolls: i + 5 }).catch(e => { // no further up than the scan went
+                if (e instanceof BotError && ['SESSION_EXPIRED', 'CHECKPOINT', 'RATE_LIMITED'].includes(e.category)) throw e;
+                opts.logger?.debug(`Card ...${image.slice(-24)}: ${firstLine(e)}`);
+                return undefined; // a slow page load: counts as a miss, retried once
+            });
+            if (!item) missed.push(image);
+            else if (!items.some(other => other.shortcode === item.shortcode)) items.push(item);
+        }
+    }
+    if (missed.length) opts.logger?.warn(`Could not open ${missed.length} of today's ${cards.length} shared reel card(s), even on a second try; they were skipped.`, 'UNKNOWN_PAGE');
     opts.logger?.info(
         `${scrollable ? `Scrolled up ${i} times${why}` : 'No scrollable message list found, read what was on screen'}; ${items.length} link(s)${opts.todayOnly ? ' shared today' : ''}.`
     );
@@ -195,7 +165,7 @@ export async function readThread(page: Page, url: string, opts: ThreadOptions = 
     return items;
 }
 
-type Token = { kind: 'link' | 'marker' | 'other'; text: string; top: number };
+type Token = { kind: 'link' | 'card' | 'marker' | 'other'; text: string; top: number };
 
 /**
  * Runs in the page: the links and day markers in the message list, top to bottom ("other": short texts
@@ -213,6 +183,17 @@ function readTokens([todaySource, earlierSource]: string[]): Token[] {
         if (box.width || box.height) tokens.push({ kind, text, top: box.top });
     };
     root.querySelectorAll('a[href]').forEach(a => place(a, 'link', (a as HTMLAnchorElement).href));
+    // Shared reels: a big preview card (role=button) with no link; known by its image.
+    const cards = new Set<Element>();
+    root.querySelectorAll('[role="button"] img').forEach(img => {
+        const card = img.closest('[role="button"]')!;
+        const box = img.getBoundingClientRect();
+        // Reels carry a "Clip" icon; photos and other attachments open no reel page.
+        if (box.width > 150 && box.height > 250 && !img.closest('a') && !cards.has(card) && card.querySelector('svg[aria-label="Clip"]')) {
+            cards.add(card); // one image per card (some have a blurred backdrop too)
+            place(img, 'card', new URL((img as HTMLImageElement).src, location.href).pathname);
+        }
+    });
     const markers = new Set<Element>();
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
@@ -247,4 +228,105 @@ async function changes(read: () => Promise<string>, before: string, waitMs: numb
         if (Date.now() >= deadline) return false;
         await sleep(250);
     }
+}
+
+/** Opens the chat and marks its message list (data-bot-messages); throws if it does not open. */
+async function openChat(page: Page, url: string, timeout: number) {
+    try {
+        await page.goto(`${url}?hl=en`, { waitUntil: 'domcontentloaded', timeout });
+    } catch (e) {
+        throw new BotError('NETWORK', `Could not load ${url} (${firstLine(e)}).`);
+    }
+
+    // The message box. Live (2026-10-12) it is a rich-text editor labelled only by aria-placeholder="Message...",
+    // which gives it no accessible name, so match the label attributes directly.
+    const composer = page
+        .locator(':is([role="textbox"], [contenteditable="true"], textarea):is([aria-label^="message" i], [aria-placeholder^="message" i], [placeholder^="message" i])')
+        .filter({ visible: true })
+        .first();
+    const notNow = page.getByRole('button', { name: /^not now$/i });
+    const dismissPrompt = async () => {
+        if (await isVisible(notNow)) await notNow.first().click({ timeout: 5000 }).catch(() => {});
+    };
+    const deadline = Date.now() + timeout;
+    while (!(await isVisible(composer))) {
+        assertNotBounced(page.url());
+        if (Date.now() >= deadline) {
+            throw new BotError('UNKNOWN_PAGE', `The chat ${url} did not open (no message box). Check the link, and that you are still in that chat. ${await describePage(page)}`);
+        }
+        await sleep(250);
+    }
+    await dismissPrompt();
+
+    // The message list is the scrollable area just above the message box.
+    const scrollable = await composer.evaluate(box => {
+        const { left, width, top } = box.getBoundingClientRect();
+        const scrolls = (el: Element) => el.scrollHeight > el.clientHeight + 10 && /auto|scroll/.test(getComputedStyle(el).overflowY);
+        for (const dy of [40, 80, 140]) {
+            for (let el = document.elementFromPoint(left + width / 2, top - dy); el; el = el.parentElement) {
+                if (scrolls(el)) {
+                    el.setAttribute('data-bot-messages', '');
+                    return true;
+                }
+            }
+        }
+        return false;
+    });
+    return { scrollable, dismissPrompt };
+}
+
+const messagesSignature = (page: Page) =>
+    page.evaluate(() => {
+        const el = document.querySelector<HTMLElement>('[data-bot-messages]');
+        return el ? `${el.scrollTop}:${el.scrollHeight}:${el.innerText.length}` : '';
+    });
+
+// One screen at a time: jumping straight to the top skips rendering the messages in between.
+const scrollUp = (page: Page) =>
+    page.evaluate(() => {
+        const el = document.querySelector('[data-bot-messages]');
+        if (el) el.scrollTop -= el.clientHeight * 0.8; // works for reversed chat lists (scrollTop <= 0) and normal ones
+    });
+
+/**
+ * A shared reel shows as a card with no link in the page: opens the chat again, scrolls up to the card
+ * (known by its image) and clicks it, which goes to the reel's page.
+ */
+async function openCard(page: Page, url: string, image: string, opts: ThreadOptions): Promise<Shared | undefined> {
+    await openChat(page, url, opts.timeoutMs ?? 30000);
+    const card = page.locator(`[role="button"] img[src*=${JSON.stringify(image)}]`).filter({ visible: true }).first();
+    const anyCopy = page.locator(`[role="button"] img[src*=${JSON.stringify(image)}]`).first();
+    let misses = 0;
+    let idle = 0;
+    for (let i = 0; i <= (opts.maxScrolls ?? 1000) && !opts.signal?.aborted; i++) {
+        if (await anyCopy.count()) {
+            // The chat re-renders while loading, so the card can vanish under the click: retry a few times.
+            const clicked = await anyCopy
+                .scrollIntoViewIfNeeded({ timeout: 5000 })
+                .then(() => card.click({ timeout: 5000 }))
+                .then(() => true, () => false);
+            if (!clicked) {
+                if (++misses >= 3) {
+                    opts.logger?.debug(`Card ...${image.slice(-24)} found but could not be clicked.`);
+                    return undefined;
+                }
+                await sleep(1000);
+                continue;
+            }
+            const deadline = Date.now() + 10000;
+            while (Date.now() < deadline) {
+                const [ref] = extractRefs(page.url());
+                if (ref) return { ...ref, conversation: url };
+                await sleep(250);
+            }
+            return undefined;
+        }
+        const before = await messagesSignature(page);
+        await scrollUp(page);
+        idle = (await changes(() => messagesSignature(page), before, opts.loadWaitMs ?? 4000)) ? 0 : idle + 1;
+        if (idle >= 3) break; // top of the chat
+    }
+    const seen = await page.locator('[role="button"]:has(svg[aria-label="Clip"]) img').evaluateAll(imgs => imgs.map(img => (img as HTMLImageElement).src.split('?')[0].slice(-24)));
+    opts.logger?.debug(`Card ...${image.slice(-24)} not found; reel cards on screen: ${seen.join(', ') || 'none'} (${page.url()})`);
+    return undefined;
 }
