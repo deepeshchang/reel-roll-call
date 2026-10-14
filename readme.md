@@ -23,6 +23,7 @@ Built on Playwright, using your own logged-in browser session.
      the caption and cover image; without `GEMINI_API_KEY` it uses the guide's general phrases. Comments
      go out at least `COMMENT_GAP_SECONDS` apart, even across runs, at most `DAILY_LIMIT` per day, and at
      most `AUTHOR_DAILY_LIMIT` per day on the same account's posts (the rest wait for a later day).
+     A reel that already has a comment from you (`IG_USERNAME`) is skipped: not liked, not commented on.
    - `npm run review`: shows each reel with an AI draft. You approve, edit, regenerate or skip it, then
      post it yourself from your browser.
 
@@ -126,6 +127,30 @@ first, using your approved text.
 
 **Stopping:** press Ctrl+C to finish the current step and exit; press it again to exit immediately. The
 next run picks up where this one stopped.
+
+## Every day
+
+Nothing needs resetting for a new day: "today" (which reels to read, and the daily limits) follows your
+computer's clock. Example for commenting at 7:40 PM:
+
+```bash
+# Before (e.g. 7:00 PM): queue today's reels from both groups. Opening each shared reel takes a
+# while (up to ~25 minutes for a busy group), so start early. Run it again closer to 7:40 to catch late shares.
+npm run add
+
+# Optional: see what is queued
+npm run status
+
+# 7:40 PM: like and comment. GROUP_CHATS= skips re-reading the chats (already done above);
+# DAILY_LIMIT=50 lifts the day's cap for this run.
+DRY_RUN=false DAILY_LIMIT=50 GROUP_CHATS= npm run auto
+
+# Afterwards: what was posted, skipped or failed
+npm run status
+```
+
+If a run says the session expired or Instagram wants a security check, run `npm run login`, finish it in
+the browser window, then run the command again. If it stops with "Try again later", stop for the day.
 
 ## Troubleshooting
 
