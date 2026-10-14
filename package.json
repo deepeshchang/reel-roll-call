@@ -1,5 +1,5 @@
 {
-  "name": "instagram-playwright",
+  "name": "reel-roll-call",
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
@@ -15,7 +15,7 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "",
+  "description": "Daily roll call for your Instagram groups: Playwright likes and comments on every reel shared today, with limits.",
   "dependencies": {
     "@google/genai": "^1.6.0",
     "@types/node": "^24.0.3",

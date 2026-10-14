@@ -1,6 +1,30 @@
-# Instagram Reel Commenter
+# 📣 Reel Roll Call
 
-Comments on Instagram reels that people share with you, in one of two ways:
+> Daily roll call for your Instagram groups: a like ❤️ + a 2-word comment 💬 on every reel shared today.
+
+## 🧠 Why I built this
+
+At work we run a *lot* of Playwright tests. Every day, bots click buttons, fill forms and check pages
+so humans don't have to. 🤖
+
+Meanwhile, after hours, I'm in a couple of Instagram engagement groups 👥. The deal is simple: everyone
+drops their reels in the chat, and everyone likes and comments on everyone else's. Every. Single. Day.
+Open the chat, scroll, open a reel, like, type "Smooth Editing 🔥", back, next one... 😮‍💨
+
+And the TPM in me went: *"Wait. This is a repetitive workflow with clear rules. We already automate
+exactly this kind of thing with Playwright. Why am I doing it by hand?"* 💡
+
+So here it is: Playwright, but instead of testing buttons it shows up for my group's reels 🎬. It
+reads today's reels from the groups, works out what each one is about with Gemini ✨, picks a fitting
+comment from the group's guide, likes it, comments, and waits a polite gap before the next one ⏳.
+It runs on my laptop, in my own logged-in browser, when I tell it to. That's it.
+
+> ⚠️ **Read the [disclaimer](#-disclaimer) before using this.** Automating Instagram is against its
+> Terms of Use and can get your account restricted.
+
+## 🎯 What it does
+
+It comments on Instagram reels that people share with you, in one of two ways:
 
 - **Auto** (`npm run auto`): the bot picks up the reels shared today in your group chats, likes each one
   and comments with a phrase from the groups' comment guide that fits the reel ("Yummy Dish 🍽️",
@@ -10,7 +34,7 @@ Comments on Instagram reels that people share with you, in one of two ways:
 
 Built on Playwright, using your own logged-in browser session.
 
-## How it works
+## ⚙️ How it works
 
 1. **Queue reels** (`npm run add`). It reads the chats in `GROUP_CHATS` back to the first message of an
    earlier day and queues the reels and posts shared there today. It also takes a chat link
@@ -31,7 +55,7 @@ Everything is recorded in a local SQLite database: URL, chat, author, comment, s
 timestamps. A reel is never commented on twice. The bot marks a reel as "posting" before it clicks Post,
 so if a run is cut off mid-post, that reel is not retried.
 
-## Risks and limits (read this)
+## 🚦 Risks and limits (read this)
 
 - **Auto mode is against Instagram's Terms of Use.** Instagram has no API for commenting on other
   people's reels, so auto mode drives your logged-in browser. The same short phrases on many reels look
@@ -48,7 +72,7 @@ so if a run is cut off mid-post, that reel is not retried.
 - **Use the chat's own address, not an invite link.** Open the group in a browser and copy the
   `instagram.com/direct/t/...` URL. Invite links are refused because opening one can add you to a group.
 
-## Setup (macOS)
+## 🛠️ Setup (macOS)
 
 1. Install Node.js 22.13 or newer (`brew install node`). Node 26 was used to build this; it provides the
    built-in `node:sqlite`.
@@ -69,7 +93,7 @@ so if a run is cut off mid-post, that reel is not retried.
    npm run login
    ```
 
-## Settings (`.env`)
+## 🔧 Settings (`.env`)
 
 | Variable | Required | Meaning |
 |---|---|---|
@@ -87,7 +111,7 @@ so if a run is cut off mid-post, that reel is not retried.
 | `AI_PROMPT_HINT` | no | Extra guidance for the AI's comment style. |
 | `AUTHORIZED_THREADS` | no | Comma-separated chats allowed for DM-export import. |
 
-## Usage
+## ▶️ Usage
 
 ```bash
 # 0. Once: put your group chats in .env
@@ -128,7 +152,7 @@ first, using your approved text.
 **Stopping:** press Ctrl+C to finish the current step and exit; press it again to exit immediately. The
 next run picks up where this one stopped.
 
-## Every day
+## 📅 Every day
 
 Nothing needs resetting for a new day: "today" (which reels to read, and the daily limits) follows your
 computer's clock. Example for commenting at 7:40 PM:
@@ -152,7 +176,7 @@ npm run status
 If a run says the session expired or Instagram wants a security check, run `npm run login`, finish it in
 the browser window, then run the command again. If it stops with "Try again later", stop for the day.
 
-## Troubleshooting
+## 🩺 Troubleshooting
 
 - **`[SESSION_EXPIRED]`, `[AUTH_REQUIRED]`, `[TWO_FACTOR]`, `[CHECKPOINT]`:** run `npm run login` and finish
   the step in the browser window.
@@ -164,14 +188,28 @@ the browser window, then run the command again. If it stops with "Try again late
 - Logs: human-readable on screen, structured JSON lines in `data/logs/bot.jsonl`. Passwords and API keys
   are redacted.
 
-## Development
+## 🧪 Development
 
 ```bash
 npm test           # offline tests: real headless Chromium against local copies of Instagram's pages
 npm run typecheck
 ```
 
-## Disclaimer
+## ⚖️ Disclaimer
 
-Use this with your own account and at your own risk. Automated commenting breaks Instagram's Terms of
-Use and can get your account restricted or disabled.
+- This is a **personal hobby project**, not affiliated with, endorsed by, or connected to Instagram or
+  Meta. "Instagram" is a trademark of its owner.
+- **Automated liking and commenting breaks Instagram's Terms of Use.** Using it can get comments
+  blocked, hidden, or your account restricted or disabled. You use it **at your own risk**, with your own
+  account only.
+- It deliberately does **not** bypass CAPTCHAs, 2FA or security checks, spoof browser fingerprints,
+  rotate proxies, or try to hide from Instagram. When Instagram pushes back, it stops.
+- Don't use it to spam, harass, or mass-target accounts. Keep the limits low and the gaps long.
+- No passwords, cookies or session data are in this repo; they live in your gitignored `.env` and
+  `data/` folder. Keep them that way.
+- Provided "as is", without warranty of any kind (see [LICENSE](LICENSE)).
+
+## 🙏 Credits
+
+Started from [dzeveckij's Instagram Playwright project](https://github.com/dzeveckij/instagram-ai-commenter-bot) (MIT), then
+rebuilt around group chats, daily limits, likes and the comment guide.
