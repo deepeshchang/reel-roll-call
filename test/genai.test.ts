@@ -19,10 +19,15 @@ function modelAnswering(answer: string) {
 }
 
 describe('AICommentGenerator.categorize', () => {
-    test('returns the category the model picks by number', async () => {
-        const { generator, prompts } = modelAnswering('3');
-        assert.equal(await generator.categorize('pasta night', undefined, ['Editing', 'Fashion', 'Food']), 2);
+    test('returns the category the model picks by number, with its confidence', async () => {
+        const { generator, prompts } = modelAnswering('3 85');
+        assert.deepEqual(await generator.categorize('pasta night', undefined, ['Editing', 'Fashion', 'Food']), { index: 2, confidence: 85 });
         assert.match(prompts[0], /1\. Editing\n2\. Fashion\n3\. Food/);
+    });
+
+    test('a missing confidence counts as 0', async () => {
+        const { generator } = modelAnswering('2');
+        assert.deepEqual(await generator.categorize('', undefined, ['Editing', 'Food']), { index: 1, confidence: 0 });
     });
 
     test('raises AI when the answer is not one of the numbers', async () => {

@@ -25,8 +25,10 @@ export const COMMENT_GUIDE: GuideEntry[] = [
     { category: 'Food Content', about: 'food, cooking, restaurants', phrases: ['Delicious Treat 😋', 'Yummy Dish 🍽️', 'Tasty Creation 🤤', 'Location Please 📍', 'Food Location 🍴'] },
 ];
 
-// ponytail: for a reel whose content could not be judged (no AI, or it failed) - the guide's most general phrases.
-export const GENERAL = ['Beautiful Vibes 💖', 'Positive Energy ⚡', 'Lovely Moments 🥰'];
+// For a reel whose content could not be judged (no AI, it failed, or it was unsure) - the owner's choice.
+export const GENERAL = ['Nice Reel 👏', 'Nice Reel ✨', 'Nice Reel 🙌'];
+// Below this confidence (0-100) in the AI's category, GENERAL is used. ponytail: fixed; make it a setting if it needs tuning.
+export const MIN_CONFIDENCE = 70;
 
 /** A phrase at random - not one of the `recent` ones, when there is a choice. */
 export function pickPhrase(phrases: string[], recent: string[]): string {

@@ -13,7 +13,7 @@ import { ReelRow, ReelStore } from './db';
 import { openReel, ReelInfo } from './reel';
 import { readThread, threadUrl, ThreadOptions } from './thread';
 import { alreadyCommented, CommentOutcome, likePost, LikeOutcome, postAndRecord, postComment, Save } from './comment';
-import { COMMENT_GUIDE, GuideEntry, guidePhrase } from './guide';
+import { COMMENT_GUIDE, GuideEntry, guidePhrase, MIN_CONFIDENCE } from './guide';
 import { AICommentGenerator } from './genai';
 import { askApproval, describeReel } from './approval';
 import { handOffForPosting } from './submit';
@@ -317,7 +317,9 @@ async function fittingPhrase(ai: AICommentGenerator | undefined, info: { caption
     let entry: GuideEntry | undefined;
     if (ai) {
         try {
-            entry = COMMENT_GUIDE[await ai.categorize(info.caption ?? '', info.imageUrl, COMMENT_GUIDE.map(g => `${g.category} (${g.about})`))];
+            const { index, confidence } = await ai.categorize(info.caption ?? '', info.imageUrl, COMMENT_GUIDE.map(g => `${g.category} (${g.about})`));
+            if (confidence >= MIN_CONFIDENCE) entry = COMMENT_GUIDE[index];
+            else log.info(`AI is unsure (${confidence}% ${COMMENT_GUIDE[index].category}) - using a general phrase.`);
         } catch (e) {
             log.warn(`${firstLine(e)} Using a general phrase.`, 'AI');
         }

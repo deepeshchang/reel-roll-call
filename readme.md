@@ -20,7 +20,7 @@ Built on Playwright, using your own logged-in browser session.
    - `npm run auto`: queues today's reels from `GROUP_CHATS` first, then opens each queued reel, likes it
      (never un-likes one you already liked), and comments with a phrase from the comment guide in
      `src/guide.ts`: 2 words + 1 emoji, in the category that fits the reel. Gemini picks the category from
-     the caption and cover image; without `GEMINI_API_KEY` it uses the guide's general phrases. Comments
+     the caption and cover image, with a confidence score; below 70%, or without `GEMINI_API_KEY`, it uses "Nice Reel 👏" (or ✨ 🙌). Comments
      go out at least `COMMENT_GAP_SECONDS` apart, even across runs, at most `DAILY_LIMIT` per day, and at
      most `AUTHOR_DAILY_LIMIT` per day on the same account's posts (the rest wait for a later day).
      A reel that already has a comment from you (`IG_USERNAME`) is skipped: not liked, not commented on.
