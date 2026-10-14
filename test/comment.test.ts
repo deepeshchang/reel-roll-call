@@ -1,7 +1,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Page } from 'playwright';
-import { likePost, postAndRecord, postComment } from '../src/comment';
+import { alreadyCommented, likePost, postAndRecord, postComment } from '../src/comment';
 import { ReelStore } from '../src/db';
 import { BotError, ErrorCategory } from '../src/logger';
 import { htmlPage, offlinePage, Respond, serveHtml, useBrowser } from './helpers';
@@ -253,5 +253,21 @@ describe('likePost', () => {
     test('raises UNKNOWN_PAGE when there is no Like button', async () => {
         const { page } = await openFakePost('<main><article>post</article></main>');
         await rejectsWith(likePost(page, { timeoutMs: 800 }), 'UNKNOWN_PAGE');
+    });
+});
+
+describe('alreadyCommented', () => {
+    // The left menu links to your own profile too ("Profile"), so only comments in the post count.
+    const nav = '<nav><a href="/test_account/">Profile</a></nav>';
+    const post = (comments: string) => `${nav}<main><article><ul>${comments}</ul></article></main>`;
+
+    test('finds your comment on the reel', async () => {
+        const { page } = await openFakePost(post('<li><a href="/someone_else/">someone_else</a> Great</li><li><a href="/test_account/?hl=en">test_account</a> Lovely Colors 🌈</li>'));
+        assert.equal(await alreadyCommented(page, 'test_account'), true);
+    });
+
+    test('ignores your profile link in the menu and other people\'s comments', async () => {
+        const { page } = await openFakePost(post('<li><a href="/someone_else/">someone_else</a> Great</li>'));
+        assert.equal(await alreadyCommented(page, 'test_account'), false);
     });
 });

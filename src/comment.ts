@@ -14,6 +14,20 @@ const REFUSED_TEXT = /could(n.t| not) post( your)? comment|unable to post commen
 const SETTLE_MS = 2000; // a refusal can replace the optimistically shown comment a moment later
 
 /**
+ * Whether a comment by `username` is among the comments shown on the post open in `page`. Only the post
+ * counts (the menu links to your profile too). ponytail: Instagram shows only part of long comment threads.
+ */
+export async function alreadyCommented(page: Page, username: string): Promise<boolean> {
+    const name = username.toLowerCase();
+    return page
+        .locator('main a[href]')
+        .evaluateAll(
+            (links, name) => links.some(a => new URL((a as HTMLAnchorElement).href).pathname.toLowerCase().replace(/\/$/, '') === `/${name}` && a.textContent?.trim().toLowerCase() === name),
+            name
+        );
+}
+
+/**
  * Likes the post open in `page` with one click on its heart - never when it is already liked, since a
  * click would unlike it. Throws RATE_LIMITED (Instagram blocked it) or UNKNOWN_PAGE (no Like button).
  */

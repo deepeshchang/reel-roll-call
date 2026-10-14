@@ -12,7 +12,7 @@ import { ExportThread, InputResult, readInput } from './ingest';
 import { ReelRow, ReelStore } from './db';
 import { openReel, ReelInfo } from './reel';
 import { readThread, threadUrl, ThreadOptions } from './thread';
-import { CommentOutcome, likePost, LikeOutcome, postAndRecord, postComment, Save } from './comment';
+import { alreadyCommented, CommentOutcome, likePost, LikeOutcome, postAndRecord, postComment, Save } from './comment';
 import { COMMENT_GUIDE, GuideEntry, guidePhrase } from './guide';
 import { AICommentGenerator } from './genai';
 import { askApproval, describeReel } from './approval';
@@ -379,6 +379,11 @@ async function cmdAuto(args: string[]): Promise<void> {
                 continue;
             }
             const where = `${row.url}${author ? ` (@${author})` : ''}`;
+            if (await alreadyCommented(session.page, config.username)) {
+                save({ author, caption, status: 'skipped', submission: 'not commented: you had already commented on it' });
+                log.info(`${where}: you already commented on it - skipped.`);
+                continue;
+            }
             const screenshotOnError = (name: string) => async (e: unknown) => {
                 await session!.page.screenshot({ path: path.join(logsDir, `${name}_${row.shortcode}.png`) }).catch(() => {});
                 throw e;
