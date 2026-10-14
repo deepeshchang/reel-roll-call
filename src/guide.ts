@@ -23,6 +23,8 @@ export const COMMENT_GUIDE: GuideEntry[] = [
         phrases: ['Lovely Moments 🥰', 'Beautiful Vibes 💖', 'Great Memories 🌷', 'Location Please 📍', 'Exact Location 📌'],
     },
     { category: 'Food Content', about: 'food, cooking, restaurants', phrases: ['Delicious Treat 😋', 'Yummy Dish 🍽️', 'Tasty Creation 🤤', 'Location Please 📍', 'Food Location 🍴'] },
+    { category: 'Muslim / Islamic', about: 'hijab, Islamic reminders, Quran, prayer, modest wear', phrases: ['Keep Growing 🌱', 'Keep Growing 🤲', 'Keep Growing ✨'] },
+    { category: 'Mom / Baby', about: 'mothers, babies, pregnancy, parenting', phrases: ['Keep Growing 🌱', 'Keep Growing 💖', 'Keep Growing 👶'] },
 ];
 
 // For a reel whose content could not be judged (no AI, it failed, or it was unsure) - the owner's choice.
